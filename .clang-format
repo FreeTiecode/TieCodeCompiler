@@ -1,0 +1,20 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 100
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+DerivePointerAlignment: false
+PointerAlignment: Left
+AccessModifierOffset: -2
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+BreakBeforeBraces: Attach
+AlignAfterOpenBracket: Align
+...
