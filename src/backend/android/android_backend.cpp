@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "constants.h"
+#include "file_search.h"
 #include "java_type_mapper.h"
 
 #include <algorithm>
@@ -102,17 +103,19 @@ void AndroidBackend::PrepareLibraries() {
       output_classes_ != nullptr ? *output_classes_ : std::vector<const ClassInfo*>();
   const bool hard_mode = options_.Flag(option::kHardMode);
   const std::string libs_dir = LibsDir();
-  std::vector<std::filesystem::path> lib_search_prefixes;
-  for (const std::string& prefix : options_.ListOption(option::kSearchLibPrefix))
-    lib_search_prefixes.emplace_back(prefix);
   const auto resolve_library_path = [&](const ClassDecl& declaration, const std::string& path) {
     std::filesystem::path candidate(path);
     if (!candidate.is_absolute()) {
+      std::vector<std::string> prefixes;
+      for (const std::string& prefix : options_.ListOption(option::kSearchLibPrefix))
+        prefixes.push_back(prefix);
+      const std::filesystem::path resolved =
+          file_search::ResolvePath(path, declaration.file, prefixes);
+      if (!resolved.empty())
+        return resolved.string();
       std::vector<std::filesystem::path> bases;
       bases.push_back(std::filesystem::path(declaration.file).parent_path());
       bases.push_back(std::filesystem::path("."));
-      for (const std::filesystem::path& prefix : lib_search_prefixes)
-        bases.push_back(prefix);
       std::error_code base_error;
       for (const std::filesystem::path& base : bases) {
         const std::filesystem::path full = base / candidate;
@@ -126,6 +129,40 @@ void AndroidBackend::PrepareLibraries() {
     const std::filesystem::path canonical =
         std::filesystem::weakly_canonical(candidate, canonical_error);
     return (canonical_error ? candidate.lexically_normal() : canonical).string();
+  };
+  const auto expand_library = [&resolve_library_path, &seen](
+                                  const ClassDecl& declaration, const std::string& path,
+                                  bool compile_only, std::vector<LibraryEntry>* entries) {
+    const std::string file = resolve_library_path(declaration, path);
+    std::error_code directory_error;
+    if (!std::filesystem::is_directory(file, directory_error)) {
+      if (!seen.insert(file).second)
+        return;
+      LibraryEntry entry;
+      entry.file = file;
+      entry.compile_only = compile_only;
+      entries->push_back(std::move(entry));
+      return;
+    }
+    std::vector<std::filesystem::path> children;
+    for (const std::filesystem::directory_entry& item : std::filesystem::directory_iterator(file)) {
+      if (!item.is_regular_file())
+        continue;
+      const std::string extension = item.path().extension().string();
+      if (extension != ".jar" && extension != ".aar")
+        continue;
+      children.push_back(item.path());
+    }
+    std::sort(children.begin(), children.end());
+    for (const std::filesystem::path& child : children) {
+      const std::string canonical = std::filesystem::weakly_canonical(child).string();
+      if (!seen.insert(canonical).second)
+        continue;
+      LibraryEntry entry;
+      entry.file = canonical;
+      entry.compile_only = compile_only;
+      entries->push_back(std::move(entry));
+    }
   };
   for (const ClassInfo* klass : emitted) {
     if (klass == nullptr || klass->declaration == nullptr)
@@ -142,27 +179,24 @@ void AndroidBackend::PrepareLibraries() {
         if (argument.name == "不打包")
           compile_only = argument.value == "真";
       }
-      std::string file = resolve_library_path(declaration, path);
-      bool copied = false;
-      if (hard_mode && !compile_only) {
-        const std::string base = std::filesystem::path(file).filename().string();
-        const std::string relative = libs_dir + "/" + base;
-        if (sink_ != nullptr)
-          sink_->CopyFile(file, relative);
-        copied = true;
-        std::error_code abs_error;
-        const std::filesystem::path absolute_root =
-            std::filesystem::absolute(options_.output_dir, abs_error);
-        file = (abs_error ? std::filesystem::path(options_.output_dir) : absolute_root).string() +
-               "/" + relative;
+      std::vector<LibraryEntry> expanded;
+      expand_library(declaration, path, compile_only, &expanded);
+      for (LibraryEntry& entry : expanded) {
+        if (hard_mode && !entry.compile_only) {
+          const std::string base = std::filesystem::path(entry.file).filename().string();
+          const std::string relative = libs_dir + "/" + base;
+          if (sink_ != nullptr)
+            sink_->CopyFile(entry.file, relative);
+          entry.copied = true;
+          std::error_code abs_error;
+          const std::filesystem::path absolute_root =
+              std::filesystem::absolute(options_.output_dir, abs_error);
+          entry.file =
+              (abs_error ? std::filesystem::path(options_.output_dir) : absolute_root).string() +
+              "/" + relative;
+        }
+        library_entries_.push_back(std::move(entry));
       }
-      if (!seen.insert(file).second)
-        continue;
-      LibraryEntry entry;
-      entry.file = file;
-      entry.compile_only = compile_only;
-      entry.copied = copied;
-      library_entries_.push_back(std::move(entry));
     }
   }
   const bool hard_mode_enabled = options_.Flag(option::kHardMode);

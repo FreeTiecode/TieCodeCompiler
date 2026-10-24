@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "constants.h"
+#include "file_search.h"
 #include "java_type_mapper.h"
 #include "output_sink.h"
 #include "pinyin_table.h"
@@ -150,21 +151,18 @@ std::string AndroidResourceBinder::ResolvePath(const ClassInfo& owner,
   const std::filesystem::path direct(path);
   if (direct.is_absolute())
     return path;
-  std::string base;
-  if (owner.declaration != nullptr) {
-    base = std::filesystem::path(owner.declaration->file).parent_path().string();
-  }
-  std::string candidate = JoinPath(base, path);
-  if (std::filesystem::exists(candidate))
-    return candidate;
-  if (std::filesystem::exists(path))
-    return path;
-  for (const std::string& prefix : config_.ListOption(option::kSearchResPrefix)) {
-    candidate = JoinPath(prefix, path);
-    if (std::filesystem::exists(candidate))
-      return candidate;
-  }
-  return candidate;
+  std::vector<std::string> prefixes;
+  for (const std::string& prefix : config_.ListOption(option::kSearchResPrefix))
+    prefixes.push_back(prefix);
+  for (const std::string& prefix : config_.ListOption(option::kSearchLibPrefix))
+    prefixes.push_back(prefix);
+  std::string source_file;
+  if (owner.declaration != nullptr)
+    source_file = owner.declaration->file;
+  const std::filesystem::path resolved = file_search::ResolvePath(path, source_file, prefixes);
+  if (!resolved.empty())
+    return resolved.string();
+  return JoinPath(std::filesystem::path(source_file).parent_path().string(), path);
 }
 
 void AndroidResourceBinder::RegisterOwnedName(const std::string& group,

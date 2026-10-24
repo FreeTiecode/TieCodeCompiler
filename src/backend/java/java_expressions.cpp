@@ -171,9 +171,18 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
       const bool numeric_literal =
           expression.raw == expression.text && !expression.text.empty() &&
           (expression.text[0] == '-' || (expression.text[0] >= '0' && expression.text[0] <= '9'));
-      if (numeric_literal && expression.text.find('.') != std::string::npos &&
-          expression.text.find_first_of("fFdD") == std::string::npos) {
-        return expression.text + "D";
+      if (numeric_literal && expression.text.find('.') != std::string::npos) {
+        std::string text = expression.text;
+        const char last = text.back();
+        if (last == 'f' || last == 'F') {
+          text.back() = 'F';
+          return text;
+        }
+        if (last == 'd' || last == 'D') {
+          text.back() = 'D';
+          return text;
+        }
+        return text + "D";
       }
       if (!expression.raw.empty() && (expression.raw[0] == '"' || expression.raw[0] == '\'')) {
         const char quote = expression.raw[0];

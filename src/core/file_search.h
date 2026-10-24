@@ -20,6 +20,10 @@ std::vector<std::filesystem::path> AncestorDirectories(const std::string& file,
 bool ResolveWithPrefixes(const std::string& raw_path, const std::string& file,
                          const std::vector<std::string>& prefixes, bool* found_locally = nullptr);
 
+std::filesystem::path ResolvePath(const std::string& raw_path, const std::string& file,
+                                  const std::vector<std::string>& prefixes,
+                                  bool* found_locally = nullptr);
+
 }
 }
 

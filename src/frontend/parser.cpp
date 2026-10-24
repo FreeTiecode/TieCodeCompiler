@@ -516,7 +516,7 @@ bool Parser::ParseClassBodyItem(ClassDecl* class_decl) {
         member.name = Next().text;
       }
       ParseParameters(&member.parameters);
-      if (MatchSymbol(":")) {
+      if (MatchSymbol(":") || Match("为")) {
         member.type_position = Peek().position;
         member.type_name = ParseTypeName();
       }
@@ -543,7 +543,7 @@ bool Parser::ParseClassBodyItem(ClassDecl* class_decl) {
         member.name = Next().text;
       }
       ParseParameters(&member.parameters);
-      if (MatchSymbol(":")) {
+      if (MatchSymbol(":") || Match("为")) {
         member.type_position = Peek().position;
         member.type_name = ParseTypeName();
       }
@@ -592,7 +592,7 @@ void Parser::ParseMethod(ClassDecl* class_decl, Member& member, const std::strin
   }
 
   ParseParameters(&member.parameters);
-  if (MatchSymbol(":")) {
+  if (MatchSymbol(":") || Match("为")) {
     member.type_position = Peek().position;
     member.type_name = ParseTypeName();
   }
@@ -631,7 +631,7 @@ bool Parser::ParseParameters(std::vector<Parameter>* parameters) {
         Next();
     } else {
       parameter.name = Next().text;
-      if (MatchSymbol(":")) {
+      if (MatchSymbol(":") || Match("为")) {
         parameter.type_position = Peek().position;
         parameter.type_name = ParseTypeName();
       }
@@ -837,6 +837,10 @@ StmtPtr Parser::ParseIf() {
         !IsAtEnd() && !(Check("结束")) && Peek().position.line == else_position.line && !Check(";");
     if (Check("如果")) {
       statement->else_body.push_back(ParseIf());
+      if (Check("结束"))
+        statement->end_line = static_cast<int>(Peek().position.line) + 1;
+      Expect("结束", "'结束'");
+      Expect("如果", "'如果'");
       return statement;
     }
     if (same_line_condition) {
