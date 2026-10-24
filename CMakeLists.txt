@@ -64,7 +64,15 @@ target_link_libraries(tiecodec PRIVATE tiecodec_core)
 
 enable_testing()
 
-find_package(GTest 1.10 REQUIRED)
+find_package(GTest 1.10 QUIET)
+if(NOT GTest_FOUND)
+  include(FetchContent)
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip)
+  FetchContent_MakeAvailable(googletest)
+endif()
 include(GoogleTest)
 
 add_executable(tiecodec_tests
