@@ -21,7 +21,7 @@ bool HasDirectMember(const ClassDecl& declaration, const std::string& name) {
   return false;
 }
 
-}  // namespace
+}
 
 void ValidateEnvironment(const EnvironmentContract& contract, const SymbolTable& symbols,
                          Diagnostics* diagnostics) {
@@ -57,4 +57,4 @@ void ValidateEnvironment(const EnvironmentContract& contract, const SymbolTable&
   }
 }
 
-}  // namespace tiecodec
+}

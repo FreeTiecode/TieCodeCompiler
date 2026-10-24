@@ -32,4 +32,4 @@ const std::vector<RequiredMember>& AndroidEnvironmentContract::RequiredMembers()
   return members;
 }
 
-}  // namespace tiecodec
+}

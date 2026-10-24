@@ -39,10 +39,13 @@ private:
   bool GenerateInternal(const ClassInfo* entry);
 
   bool WriteFile(const std::string& relative_path, const std::string& content);
+  bool WriteClassFiles(const ClassInfo* klass, ClassOutput* output,
+                       std::set<const ClassInfo*>* emitted_classes);
   bool WriteProjectFiles(const ClassInfo& entry);
   bool GradleMode() const;
   std::string MainPrefix() const;
   std::string SourceDir() const;
+  std::string LibsDir() const;
   std::string ReadTemplate(const std::string& relative) const;
   bool WriteGradleProject();
   struct LibraryEntry {
@@ -73,6 +76,6 @@ private:
   const std::vector<const ClassInfo*>* output_classes_ = nullptr;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

@@ -17,6 +17,6 @@ public:
   virtual bool IsNativeType(const std::string& type_name, const ClassInfo* context_class) const = 0;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

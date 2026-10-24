@@ -15,10 +15,22 @@ public:
     return index_ == text_.size() && value;
   }
 
+  bool ParseStrict() {
+    (void)Or();
+    if (index_ != text_.size())
+      ok_ = false;
+    return ok_;
+  }
+
 private:
   bool Or() {
     bool value = And();
     while (PeekWord("或")) {
+      if (PeekWord("或者")) {
+        index_ += std::string("或者").size();
+        ok_ = false;
+        return value;
+      }
       index_ += std::string("或").size();
       const bool right = And();
       value = value || right;
@@ -45,13 +57,18 @@ private:
   }
 
   bool Primary() {
-    if (index_ >= text_.size())
+    if (index_ >= text_.size()) {
+      ok_ = false;
       return false;
+    }
     if (text_[index_] == '(') {
       ++index_;
       const bool value = Or();
-      if (index_ < text_.size() && text_[index_] == ')')
-        ++index_;
+      if (index_ >= text_.size() || text_[index_] != ')') {
+        ok_ = false;
+        return value;
+      }
+      ++index_;
       return value;
     }
     if (PeekWord("已定义") || PeekWord("未定义")) {
@@ -59,11 +76,11 @@ private:
       index_ += negated ? std::string("未定义").size() : std::string("已定义").size();
       while (index_ < text_.size() && (text_[index_] == ' ' || text_[index_] == '\t'))
         ++index_;
-      bool wrapped = false;
-      if (index_ < text_.size() && text_[index_] == '(') {
-        ++index_;
-        wrapped = true;
+      if (index_ >= text_.size() || text_[index_] != '(') {
+        ok_ = false;
+        return false;
       }
+      ++index_;
       std::string name;
       if (index_ < text_.size() && (text_[index_] == '"' || text_[index_] == '\'')) {
         const char quote = text_[index_++];
@@ -72,17 +89,15 @@ private:
         if (index_ < text_.size())
           ++index_;
       } else {
-        while (index_ < text_.size() &&
-               (text_[index_] == '_' || text_[index_] == '.' || (text_[index_] & 0x80) != 0 ||
-                (text_[index_] >= '0' && text_[index_] <= '9') ||
-                (text_[index_] >= 'a' && text_[index_] <= 'z') ||
-                (text_[index_] >= 'A' && text_[index_] <= 'Z'))) {
+        while (index_ < text_.size() && IsNameByte(text_[index_]))
           name.push_back(text_[index_++]);
-        }
       }
-      if (wrapped && index_ < text_.size() && text_[index_] == ')')
+      if (index_ < text_.size() && text_[index_] == ')') {
         ++index_;
-      const bool defined = defines_.count(name) != 0;
+      } else {
+        ok_ = false;
+      }
+      const bool defined = !name.empty() && defines_.count(name) != 0;
       return negated ? !defined : defined;
     }
     if (PeekWord("真")) {
@@ -93,18 +108,25 @@ private:
       index_ += std::string("假").size();
       return false;
     }
-    std::string name;
-    while (index_ < text_.size() &&
-           (text_[index_] == '_' || text_[index_] == '.' || (text_[index_] & 0x80) != 0 ||
-            (text_[index_] >= '0' && text_[index_] <= '9') ||
-            (text_[index_] >= 'a' && text_[index_] <= 'z') ||
-            (text_[index_] >= 'A' && text_[index_] <= 'Z'))) {
-      name.push_back(text_[index_++]);
+    if (IsNameByte(text_[index_]) && !std::isdigit(static_cast<unsigned char>(text_[index_]))) {
+      std::string name;
+      while (index_ < text_.size() && IsNameByte(text_[index_]))
+        name.push_back(text_[index_++]);
+      if (name == "且" || name == "或" || name == "非") {
+        ok_ = false;
+        return false;
+      }
+      const auto it = defines_.find(name);
+      return it != defines_.end() && it->second;
     }
-    if (name.empty())
-      return false;
-    const auto it = defines_.find(name);
-    return it != defines_.end() && it->second;
+    ok_ = false;
+    return false;
+  }
+
+  static bool IsNameByte(char c) {
+    const unsigned char byte = static_cast<unsigned char>(c);
+    return c == '_' || c == '.' || byte >= 0x80 || (byte >= '0' && byte <= '9') ||
+           (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
   }
 
   bool PeekWord(const std::string& word) const {
@@ -114,6 +136,7 @@ private:
   const std::string& text_;
   const std::map<std::string, bool>& defines_;
   std::size_t index_ = 0;
+  bool ok_ = true;
 };
 
 const Annotation* FindCondition(const std::vector<Annotation>& annotations) {
@@ -139,7 +162,7 @@ bool ConditionOf(const std::vector<Annotation>& annotations,
   return parser.Parse();
 }
 
-}  // namespace
+}
 
 bool EvaluateCompileCondition(const std::string& expression,
                               const std::map<std::string, bool>& defines) {
@@ -147,6 +170,14 @@ bool EvaluateCompileCondition(const std::string& expression,
     return true;
   Parser parser(expression, defines);
   return parser.Parse();
+}
+
+bool CompileConditionParses(const std::string& expression,
+                            const std::map<std::string, bool>& defines) {
+  if (expression.empty())
+    return false;
+  Parser parser(expression, defines);
+  return parser.ParseStrict();
 }
 
 void ApplyCompileConditions(Unit* unit, const std::map<std::string, bool>& defines) {
@@ -167,4 +198,4 @@ void ApplyCompileConditions(Unit* unit, const std::map<std::string, bool>& defin
   unit->classes = std::move(classes);
 }
 
-}  // namespace tiecodec
+}

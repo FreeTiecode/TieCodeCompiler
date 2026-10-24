@@ -16,9 +16,6 @@ namespace tiecodec {
 
 class OutputSink;
 
-/// Android implementation of ResourceBinder: turns resource-typed constants into
-/// R references and the matching res/ files, internationalized strings, themes,
-/// extra resources and manifest fragments.
 class AndroidResourceBinder : public ResourceBinder {
 public:
   AndroidResourceBinder(const SymbolTable& symbols, const BackendConfig& config);
@@ -28,7 +25,6 @@ public:
   std::string BindField(const ClassInfo& owner, const Member& member) override;
   std::string ResourceImport(const ClassInfo& owner) const override;
 
-  /// Platform annotations of an emitted class (resources, libraries, manifest).
   void set_output_prefix(std::string prefix) {
     output_prefix_ = std::move(prefix);
   }
@@ -37,10 +33,8 @@ public:
   }
 
   void ProcessClassAnnotations(const ClassInfo& klass);
-  /// Manifest fragments attached to an emitted used member.
   void ProcessMemberManifest(const ClassInfo& klass, const Member& member);
 
-  /// Files represented by the collected resources (strings/styles/copies).
   void Write(OutputSink& sink) const;
 
   bool HasResources() const {
@@ -112,6 +106,6 @@ private:
   bool has_styles_ = false;
 };
 
-}  // namespace tiecodec
+}
 
-#endif  // TIECODEC_BACKEND_ANDROID_RESOURCE_BINDER_H
+#endif

@@ -10,11 +10,8 @@
 
 namespace tiecodec {
 
-/// Lower camel case pinyin of an identifier (exposed for embedded code
-/// identifier transliteration).
 std::string PinyinLowerCamel(const std::string& identifier);
 
-/// Pascal case pinyin of an identifier.
 std::string PinyinCamel(const std::string& identifier);
 
 class JavaNames : public NamingScheme {
@@ -28,7 +25,11 @@ public:
   std::string ImportPath(const ClassInfo& klass) const override;
   std::string GeneratedName(const std::string& hint, int index) const override;
 
-  /// Output package of the compiler generated R class.
+  std::string AsyncContextName(const std::string& source_class_name,
+                               const std::string& member_name) const override;
+
+  std::string AsyncMethodName(const Member& member) const override;
+
   std::string RNamespace() const override;
   std::string LocalName(const std::string& name) const override;
   bool LoadStableNames(const std::string& path) override;
@@ -47,6 +48,6 @@ private:
   mutable int random_counter_ = 0;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

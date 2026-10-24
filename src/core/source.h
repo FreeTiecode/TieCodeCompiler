@@ -29,6 +29,6 @@ public:
   bool ReadFile(const std::string& path, SourceFile* file, std::string* error) override;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

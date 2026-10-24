@@ -95,7 +95,7 @@ std::uint64_t FindNumberMember(const std::string& text, const std::string& key) 
   return value;
 }
 
-}  // namespace
+}
 
 int RunRetrace(const RetraceRequest& request) {
   SourceMapping mapping;
@@ -184,4 +184,4 @@ int RunRetraceBatch(const std::string& batch_path) {
   return 0;
 }
 
-}  // namespace tiecodec
+}

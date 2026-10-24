@@ -53,7 +53,7 @@ void CollectRefs(const Stmt* statement, const std::set<std::string>& used,
     CollectRefs(child.get(), used, refs);
 }
 
-}  // namespace
+}
 
 std::set<std::string> UsedLocalNames(const Member& member) {
   std::set<std::string> declared;
@@ -86,4 +86,4 @@ bool IsLocalDeclarationUsed(const Stmt& statement, const std::set<std::string>& 
   return used.count(statement.name) > 0;
 }
 
-}  // namespace tiecodec
+}

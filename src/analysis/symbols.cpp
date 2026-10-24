@@ -1,5 +1,7 @@
 #include "symbols.h"
 
+#include "constants.h"
+
 #include <algorithm>
 
 namespace tiecodec {
@@ -33,12 +35,7 @@ std::string SimpleName(const std::string& qualified_name) {
   return dot == std::string::npos ? qualified_name : qualified_name.substr(dot + 1);
 }
 
-std::string PackageOf(const std::string& qualified_name) {
-  const size_t dot = qualified_name.rfind('.');
-  return dot == std::string::npos ? std::string() : qualified_name.substr(0, dot);
 }
-
-}  // namespace
 
 std::string ClassInfo::BaseQualifiedName() const {
   if (declaration == nullptr || declaration->base_name.empty())
@@ -48,12 +45,8 @@ std::string ClassInfo::BaseQualifiedName() const {
 
 bool SymbolTable::AddUnit(const Unit& unit, Diagnostics* diagnostics) {
   std::string unit_output_package;
-  if (const Annotation* package_name = unit.FindAnnotation("输出名")) {
-    std::string value = package_name->StringArgument("参数");
-    if (value.empty() && !package_name->arguments.empty()) {
-      value = package_name->arguments.front().value;
-    }
-
+  if (const Annotation* package_name = unit.FindAnnotation(annotation::kOutputName)) {
+    const std::string value = package_name->TextArgument(kArgumentParameter);
     if (value.find('.') != std::string::npos) {
       unit_output_package = value;
       if (!unit.package_name.empty())
@@ -70,29 +63,20 @@ bool SymbolTable::AddUnit(const Unit& unit, Diagnostics* diagnostics) {
 
     if (const Annotation* alias = class_decl.FindAnnotation("指代类")) {
       info.has_java_alias = true;
-      info.java_alias = alias->StringArgument("参数");
-      if (info.java_alias.empty() && !alias->arguments.empty()) {
-        info.java_alias = alias->arguments.front().value;
-      }
+      info.java_alias = alias->TextArgument(kArgumentParameter);
     }
-    if (const Annotation* output = class_decl.FindAnnotation("输出名")) {
-      info.output_name = output->StringArgument("参数");
-      if (info.output_name.empty() && !output->arguments.empty()) {
-        info.output_name = output->arguments.front().value;
-      }
+    if (const Annotation* output = class_decl.FindAnnotation(annotation::kOutputName)) {
+      info.output_name = output->TextArgument(kArgumentParameter);
     }
     info.global_base = class_decl.HasAnnotation("全局基础类");
-    info.forbid_new = class_decl.HasAnnotation("禁止创建对象");
+    info.forbid_new = class_decl.HasAnnotation(annotation::kNoInstantiation);
     info.is_global_class = class_decl.HasAnnotation("全局类");
     info.forbid_output = class_decl.HasAnnotation("禁止输出");
-    info.hidden = class_decl.HasAnnotation("隐藏");
+    info.hidden = class_decl.HasAnnotation(annotation::kHidden);
     info.deprecated = class_decl.HasAnnotation("废弃使用");
     info.disable_pointer = class_decl.HasAnnotation("禁用指针");
     if (const Annotation* external = class_decl.FindAnnotation("外部基础类")) {
-      info.external_base = external->StringArgument("参数");
-      if (info.external_base.empty() && !external->arguments.empty()) {
-        info.external_base = external->arguments.front().value;
-      }
+      info.external_base = external->TextArgument(kArgumentParameter);
       if (!class_decl.base_name.empty() && diagnostics != nullptr) {
         diagnostics->Error(unit.file, class_decl.base_position, "类指定外部基础类之后不能继承父类",
                            "parse.external-base.inherit");
@@ -164,4 +148,4 @@ const ClassInfo* SymbolTable::Resolve(const std::string& type_name,
   return found;
 }
 
-}  // namespace tiecodec
+}

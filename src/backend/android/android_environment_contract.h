@@ -11,6 +11,6 @@ public:
   const std::vector<RequiredMember>& RequiredMembers() const override;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

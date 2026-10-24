@@ -72,6 +72,6 @@ private:
   std::deque<Token> buffer_;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

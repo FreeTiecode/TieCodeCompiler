@@ -71,6 +71,6 @@ private:
   int fatal_count_ = 0;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

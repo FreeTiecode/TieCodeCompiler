@@ -18,29 +18,34 @@ public:
 
   virtual std::string GeneratedName(const std::string& hint, int index) const = 0;
 
-  /// Output package of the generated resource class (R).
   virtual std::string RNamespace() const {
     return {};
   }
 
-  /// Name of a local variable or parameter in the output language.
   virtual std::string LocalName(const std::string& name) const {
     return name;
   }
 
-  /// Load a stable name mapping file (friendly name modes).
+  virtual std::string AsyncContextName(const std::string& source_class_name,
+                                       const std::string& member_name) const {
+    return source_class_name + "_" + member_name + "_异步上下文";
+  }
+
+  virtual std::string AsyncMethodName(const Member& member) const {
+    return MemberName(member) + "_异步";
+  }
+
   virtual bool LoadStableNames(const std::string& path) {
     (void)path;
     return false;
   }
 
-  /// Save the current name mapping file.
   virtual bool SaveNames(const std::string& path) const {
     (void)path;
     return false;
   }
 };
 
-}  // namespace tiecodec
+}
 
 #endif

@@ -28,6 +28,6 @@ private:
 
 std::unique_ptr<Backend> CreateBackend(const std::string& platform, const SymbolTable& symbols);
 
-}  // namespace tiecodec
+}
 
 #endif

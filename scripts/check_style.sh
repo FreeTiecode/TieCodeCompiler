@@ -3,7 +3,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SRC_DIR="${REPO_ROOT}/src"
+SCAN_DIRS=("${REPO_ROOT}/src" "${REPO_ROOT}/tests")
 CLANG_FORMAT="${CLANG_FORMAT:-clang-format}"
 status=0
 
@@ -12,7 +12,11 @@ if ! command -v "${CLANG_FORMAT}" >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -t FILES < <(find "${SRC_DIR}" \( -name '*.cpp' -o -name '*.h' \) ! -name 'pinyin_table.cpp' | sort)
+FILE_LIST="$(find "${SCAN_DIRS[@]}" \( -name '*.cpp' -o -name '*.h' \) ! -name 'pinyin_table.cpp' | sort)"
+FILES=()
+if [[ -n "${FILE_LIST}" ]]; then
+  while IFS= read -r f; do FILES+=("$f"); done <<< "${FILE_LIST}"
+fi
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "[FAIL] 未找到源文件"
   exit 1

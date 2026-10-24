@@ -15,7 +15,6 @@ public:
 
   bool ParseUnit(Unit* unit);
 
-  /// Enables the experimental top-level statement mode (--enable-toplevel-stmt).
   void SetTopLevelMode(bool enabled) {
     enable_toplevel_ = enabled;
   }
@@ -90,6 +89,6 @@ private:
   int top_level_class_index_ = -1;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

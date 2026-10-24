@@ -1,3 +1,4 @@
+#include "constants.h"
 #include "java_emitter.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ bool MayBeStringOperand(const Expr& expression) {
   return true;
 }
 
-}  // namespace
+}
 
 void JavaEmitter::CollectFromExpression(const ClassInfo& klass, const Expr* expression,
                                         std::set<std::string>* imports) {
@@ -41,7 +42,7 @@ void JavaEmitter::CollectFromExpression(const ClassInfo& klass, const Expr* expr
   if (expression->kind == ExprKind::kBinary && expression->text == "+") {
     std::string folded;
     if (MayBeStringOperand(*expression) && FoldStringConcat(*expression, &folded)) {
-      if (const ClassInfo* text = symbols_.Resolve("文本", &klass)) {
+      if (const ClassInfo* text = symbols_.Resolve(builtin_type::kText, &klass)) {
         if (text != &klass)
           imports->insert(names_.ImportPath(*text));
       }
@@ -167,7 +168,7 @@ void JavaEmitter::CollectStatementImports(const ClassInfo& klass, const Stmt* st
     }
   }
   if (statement->kind == StmtKind::kLoopCount) {
-    if (const ClassInfo* counter_type = symbols_.Resolve("整数", &klass)) {
+    if (const ClassInfo* counter_type = symbols_.Resolve(builtin_type::kInteger, &klass)) {
       imports->insert(names_.ImportPath(*counter_type));
     }
   }
@@ -243,7 +244,6 @@ void JavaEmitter::CollectClassLiteralImports(const ClassInfo& klass, const Expr*
     const ClassInfo* member_owner = nullptr;
     const ClassInfo* global_owner = nullptr;
     if (FindMemberInChain(symbols_, klass, expression->text, &member_owner) != nullptr) {
-      // A member shadows a same-named class.
     } else if (FindGlobalClassMember(symbols_, klass, expression->text, &global_owner) != nullptr) {
       if (global_owner != &klass)
         imports->insert(names_.ImportPath(*global_owner));
@@ -259,18 +259,19 @@ void JavaEmitter::CollectClassLiteralImports(const ClassInfo& klass, const Expr*
 
 void JavaEmitter::CollectImports(const ClassInfo& klass, std::set<std::string>* imports) {
   if (klass.declaration != nullptr) {
-    bool has_async = false;
+    const ClassInfo* scheduler = nullptr;
     for (const Member& member : klass.declaration->members) {
       if (!IsAsyncMember(member))
         continue;
-      has_async = true;
+      if (used_members_ != nullptr && used_members_->count(&member) == 0)
+        continue;
       imports->insert(names_.Package(klass) + "." + AsyncContextTypeName(klass, member));
-    }
-    if (has_async) {
-      if (const ClassInfo* scheduler = symbols_.Resolve("异步调度器", &klass)) {
-        if (scheduler != &klass)
-          imports->insert(names_.ImportPath(*scheduler));
-      }
+      if (!AsyncMemberUsesGlobalScheduler(member))
+        continue;
+      if (scheduler == nullptr)
+        scheduler = symbols_.Resolve("异步调度器", &klass);
+      if (scheduler != nullptr && scheduler != &klass)
+        imports->insert(names_.ImportPath(*scheduler));
     }
   }
   import_local_types_.clear();
@@ -282,10 +283,7 @@ void JavaEmitter::CollectImports(const ClassInfo& klass, std::set<std::string>* 
     for (const Annotation& annotation : annotations) {
       if (annotation.name != "导入Java")
         continue;
-      std::string value = annotation.StringArgument("参数");
-      if (value.empty() && !annotation.arguments.empty()) {
-        value = annotation.arguments.front().value;
-      }
+      const std::string value = annotation.TextArgument(kArgumentParameter);
       if (!value.empty())
         imports->insert(value);
     }
@@ -305,10 +303,7 @@ void JavaEmitter::CollectImports(const ClassInfo& klass, std::set<std::string>* 
     if (klass.declaration != nullptr)
       add_java_imports(klass.declaration->annotations);
     {
-      const auto r_namespace = config_.options.find("r-namespace");
-      imports->insert(
-          (r_namespace == config_.options.end() ? config_.namespace_name : r_namespace->second) +
-          ".R");
+      imports->insert(config_.Option(option::kRNamespace, config_.namespace_name) + ".R");
     }
   }
 
@@ -424,10 +419,7 @@ void JavaEmitter::CollectImports(const ClassInfo& klass, std::set<std::string>* 
     }
   }
   {
-    const auto r_namespace = config_.options.find("r-namespace");
-    imports->insert(
-        (r_namespace == config_.options.end() ? config_.namespace_name : r_namespace->second) +
-        ".R");
+    imports->insert(config_.Option(option::kRNamespace, config_.namespace_name) + ".R");
   }
 }
 
@@ -486,8 +478,17 @@ std::string JavaEmitter::ReceiverTypeText(const ClassInfo& klass, const Expr* re
         return {};
       {
         std::string text = ReceiverTypeText(klass, receiver->children[0].get());
-        while (text.size() >= 2 && text.compare(text.size() - 2, 2, "[]") == 0) {
+        while (EndsWith(text, kOperatorIndex)) {
           text = text.substr(0, text.size() - 2);
+        }
+        if (text.empty())
+          return {};
+        const ClassInfo* receiver_class = symbols_.Resolve(BaseResolvableName(text), &klass);
+        if (receiver_class != nullptr) {
+          const ClassInfo* owner = nullptr;
+          if (const Member* indexer = FindMemberInChain(symbols_, *receiver_class, "[]", &owner)) {
+            return indexer->type_name;
+          }
         }
         return text;
       }
@@ -542,8 +543,6 @@ std::string JavaEmitter::ReceiverTypeText(const ClassInfo& klass, const Expr* re
       if (member == nullptr)
         return {};
       if (owner != base_class) {
-        // The member is inherited: resolve through the ancestor chain and map
-        // the receiver's type arguments onto the declaring class parameters.
         const ClassInfo* cursor = base_class;
         std::vector<std::string> cursor_arguments = arguments;
         std::set<const ClassInfo*> visited;
@@ -657,4 +656,4 @@ void JavaEmitter::CollectCodeRefImports(const ClassInfo& klass, const std::strin
   }
 }
 
-}  // namespace tiecodec
+}

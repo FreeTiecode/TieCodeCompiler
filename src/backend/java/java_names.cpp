@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "binary_io.h"
+#include "constants.h"
 #include "pinyin_table.h"
 
 namespace tiecodec {
@@ -17,11 +19,15 @@ JavaNames::JavaNames(const SymbolTable& symbols, const BackendConfig& config)
 
 namespace {
 
+constexpr char kNamesMagic[4] = {'T', 'N', 'M', 1};
+constexpr std::size_t kNamesMagicSize = sizeof(kNamesMagic);
+constexpr std::size_t kMinimumNamesFileSize = kNamesMagicSize + binary::kU32Size;
+
 bool IsPinyinMode(const BackendConfig& config) {
-  return config.friendly_name == "pinyin";
+  return IsPinyinNaming(config.friendly_name);
 }
 bool IsRandomMode(const BackendConfig& config) {
-  return config.friendly_name == "random";
+  return IsRandomNaming(config.friendly_name);
 }
 
 bool ReadFileText(const std::string& path, std::string* text) {
@@ -122,6 +128,25 @@ std::string LowerCamelCase(const std::string& identifier) {
   return result.empty() ? identifier : result;
 }
 
+std::string SegmentPascal(const std::string& identifier) {
+  std::string result;
+  std::size_t begin = 0;
+  bool first = true;
+  while (begin <= identifier.size()) {
+    const std::size_t underscore = identifier.find('_', begin);
+    const std::string segment = identifier.substr(
+        begin, underscore == std::string::npos ? std::string::npos : underscore - begin);
+    if (!first)
+      result.push_back('_');
+    result += CamelCase(segment);
+    first = false;
+    if (underscore == std::string::npos)
+      break;
+    begin = underscore + 1;
+  }
+  return result.empty() ? identifier : result;
+}
+
 std::string PackageInitials(const std::string& segment) {
   std::string result;
   for (const std::string& token : IdentifierTokens(segment)) {
@@ -149,7 +174,7 @@ std::string TransformPackage(const std::string& package) {
   return result;
 }
 
-}  // namespace
+}
 
 std::string PinyinLowerCamel(const std::string& identifier) {
   return LowerCamelCase(identifier);
@@ -166,75 +191,45 @@ std::string JavaNames::RandomName(const std::string& source) const {
   const auto existing = random_names_.find(source);
   if (existing != random_names_.end())
     return existing->second;
-  const std::string name = "rn_" + std::to_string(++random_counter_);
+  const std::string name = std::string(kRandomNamePrefix) + std::to_string(++random_counter_);
   random_names_[source] = name;
   return name;
 }
 
 bool JavaNames::LoadStableNames(const std::string& path) {
   std::string data;
-  if (!ReadFileText(path, &data) || data.size() < 11 ||
-      data.compare(0, 4, std::string("TNM\x01", 4)) != 0) {
+  if (!ReadFileText(path, &data) || data.size() < kMinimumNamesFileSize ||
+      data.compare(0, kNamesMagicSize, std::string(kNamesMagic, kNamesMagicSize)) != 0) {
     return false;
   }
-  std::size_t pos = 4;
-  const auto read_u32 = [&data, &pos](std::uint32_t* value) {
-    if (pos + 4 > data.size())
-      return false;
-    std::uint32_t result = 0;
-    for (int i = 0; i < 4; ++i) {
-      result |= static_cast<std::uint32_t>(static_cast<unsigned char>(data[pos + i])) << (i * 8);
-    }
-    pos += 4;
-    *value = result;
-    return true;
-  };
-  const auto read_string = [&data, &pos](std::string* value) {
-    std::uint32_t length = 0;
-    if (pos + 4 > data.size())
-      return false;
-    for (int i = 0; i < 4; ++i) {
-      length |= static_cast<std::uint32_t>(static_cast<unsigned char>(data[pos + i])) << (i * 8);
-    }
-    pos += 4;
-    if (pos + length > data.size())
-      return false;
-    value->assign(data, pos, length);
-    pos += length;
-    return true;
-  };
+  std::size_t position = kNamesMagicSize;
   std::uint32_t count = 0;
-  if (!read_u32(&count))
+  if (!binary::ReadU32(data, &position, &count))
     return false;
   stable_names_.clear();
   for (std::uint32_t i = 0; i < count; ++i) {
     std::string source;
     std::string output;
-    if (!read_string(&source) || !read_string(&output))
+    if (!binary::ReadString(data, &position, &source) ||
+        !binary::ReadString(data, &position, &output)) {
       return false;
+    }
     stable_names_[source] = output;
   }
   return true;
 }
 
 bool JavaNames::SaveNames(const std::string& path) const {
-  std::string data("TNM\x01", 4);
-  const auto write_u32 = [&data](std::uint32_t value) {
-    for (int i = 0; i < 4; ++i) {
-      data.push_back(static_cast<char>((value >> (i * 8)) & 0xFF));
-    }
-  };
-  const auto write_string = [&data, &write_u32](const std::string& value) {
-    write_u32(static_cast<std::uint32_t>(value.size()));
-    data += value;
-  };
-  write_u32(static_cast<std::uint32_t>(random_names_.size() + stable_names_.size()));
+  std::string data(kNamesMagic, kNamesMagicSize);
+  const std::uint32_t total =
+      static_cast<std::uint32_t>(random_names_.size() + stable_names_.size());
+  binary::AppendU32(&data, total);
   std::map<std::string, std::string> merged = stable_names_;
   for (const auto& entry : random_names_)
     merged[entry.first] = entry.second;
   for (const auto& entry : merged) {
-    write_string(entry.first);
-    write_string(entry.second);
+    binary::AppendString(&data, entry.first);
+    binary::AppendString(&data, entry.second);
   }
   std::ofstream output(path, std::ios::binary);
   if (!output.is_open())
@@ -304,10 +299,10 @@ std::string OperatorName(const std::string& symbol) {
       {"&", "operator_and"},
       {"|", "operator_or"},
       {"^", "operator_xor"},
-      {"=", "operator_assign"},
-      {"[]", "operator_index"},
-      {"[]=", "operator_index_assign"},
-      {"<=>", "operator_swap"},
+      {kOperatorAssign, "operator_assign"},
+      {kOperatorIndex, "operator_array_access"},
+      {kOperatorIndexAssign, "operator_array_assign"},
+      {kOperatorSwap, "operator_swap"},
       {"->", "operator_arrow"},
       {"&&", "operator_and"},
       {"||", "operator_or"},
@@ -316,7 +311,7 @@ std::string OperatorName(const std::string& symbol) {
   return it == names.end() ? std::string() : it->second;
 }
 
-}  // namespace
+}
 
 std::string JavaNames::LocalName(const std::string& name) const {
   if (IsRandomMode(config_))
@@ -326,11 +321,9 @@ std::string JavaNames::LocalName(const std::string& name) const {
 
 std::string JavaNames::MemberName(const Member& member) const {
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != "输出名")
+    if (annotation.name != annotation::kOutputName)
       continue;
-    std::string value = annotation.StringArgument("参数");
-    if (value.empty() && !annotation.arguments.empty())
-      value = annotation.arguments.front().value;
+    const std::string value = annotation.TextArgument(kArgumentParameter);
     if (!value.empty())
       return value;
   }
@@ -342,9 +335,9 @@ std::string JavaNames::MemberName(const Member& member) const {
   bool property_write = member.kind == MemberKind::kPropertyWrite;
   bool constant = member.kind == MemberKind::kConstant;
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name == "属性读")
+    if (annotation.name == annotation::kPropertyRead)
       property_read = true;
-    if (annotation.name == "属性写")
+    if (annotation.name == annotation::kPropertyWrite)
       property_write = true;
     if (annotation.name == "常量")
       constant = true;
@@ -371,6 +364,25 @@ std::string JavaNames::MemberName(const Member& member) const {
   return LowerCamelCase(member.name);
 }
 
+std::string JavaNames::AsyncContextName(const std::string& source_class_name,
+                                        const std::string& member_name) const {
+  if (IsRandomMode(config_))
+    return GeneratedName(kRandomNamePrefix, 0);
+  if (IsPinyinMode(config_)) {
+    return SegmentPascal(source_class_name) + "_" + CamelCase(member_name) +
+           SegmentPascal(kAsyncContextSuffix);
+  }
+  return source_class_name + "_" + member_name + kAsyncContextSuffix;
+}
+
+std::string JavaNames::AsyncMethodName(const Member& member) const {
+  if (IsRandomMode(config_))
+    return GeneratedName(kRandomNamePrefix, 0);
+  if (IsPinyinMode(config_))
+    return LowerCamelCase(member.name + kAsyncMethodSuffix);
+  return MemberName(member) + kAsyncMethodSuffix;
+}
+
 std::string JavaNames::ImportPath(const ClassInfo& klass) const {
   const std::string package = Package(klass);
   return package.empty() ? ClassName(klass) : package + "." + ClassName(klass);
@@ -391,8 +403,8 @@ std::string JavaNames::BaseName(const ClassInfo& klass) const {
 
 std::string JavaNames::GeneratedName(const std::string& hint, int index) const {
   if (IsRandomMode(config_))
-    return "rn_" + std::to_string(++random_counter_);
+    return std::string(kRandomNamePrefix) + std::to_string(++random_counter_);
   return hint + std::to_string(index);
 }
 
-}  // namespace tiecodec
+}

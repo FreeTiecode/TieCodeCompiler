@@ -28,6 +28,6 @@ public:
 void ValidateEnvironment(const EnvironmentContract& contract, const SymbolTable& symbols,
                          Diagnostics* diagnostics);
 
-}  // namespace tiecodec
+}
 
 #endif

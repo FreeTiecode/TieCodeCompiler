@@ -23,9 +23,11 @@ std::set<const Member*> ComputeUsedMembers(
     const std::vector<const ClassInfo*>& emitted_classes,
     std::vector<std::pair<const ClassInfo*, const Member*>>* virtual_overrides = nullptr);
 
-OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContract& contract,
-                             const ClassInfo* entry);
+bool AsyncMemberUsesGlobalScheduler(const Member& member);
 
-}  // namespace tiecodec
+OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContract& contract,
+                             const ClassInfo* entry, bool designer_profile = false);
+
+}
 
 #endif

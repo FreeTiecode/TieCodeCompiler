@@ -55,10 +55,13 @@ struct AnnotationArgument {
 struct Annotation {
   std::string name;
   SourcePosition position;
+  SourcePosition symbol_position;
   std::vector<AnnotationArgument> arguments;
 
   const AnnotationArgument* FindArgument(const std::string& argument_name) const;
   std::string StringArgument(const std::string& argument_name) const;
+  std::string TextArgument(const std::string& argument_name) const;
+  std::string UnwrappedArgument(const AnnotationArgument& argument) const;
 };
 
 struct Parameter {
@@ -193,6 +196,6 @@ struct Unit {
   const Annotation* FindAnnotation(const std::string& annotation_name) const;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

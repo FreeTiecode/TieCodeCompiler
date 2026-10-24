@@ -1,13 +1,9 @@
 #include "parser.h"
 
+#include "constants.h"
+
 namespace tiecodec {
-namespace {
-
-bool IsTypeStart(const Token& token) {
-  return token.kind == TokenKind::kIdentifier;
-}
-
-}  // namespace
+namespace {}
 
 Parser::Parser(std::string source, std::string file_name, Diagnostics* diagnostics)
     : source_(std::move(source)),
@@ -174,7 +170,7 @@ ClassDecl* Parser::EnsureTopLevelClass(Unit* unit) {
   synthetic.keyword_position = Peek().position;
   synthetic.declaration_line = static_cast<int>(Peek().position.line) + 1;
   Annotation forced;
-  forced.name = "强制输出";
+  forced.name = annotation::kForcedOutput;
   forced.position = Peek().position;
   AnnotationArgument argument;
   argument.value = "真";
@@ -197,8 +193,9 @@ bool Parser::ParseTopLevelItem(Unit* unit) {
   const std::string& text = Peek().text;
   const bool code_block = Peek().kind == TokenKind::kCodeBlock;
   const bool member_start = code_block || text == "变量" || text == "常量" || text == "方法" ||
-                            text == "属性读" || text == "属性写" || text == "定义事件" ||
-                            text == "事件";
+                            text == annotation::kPropertyRead ||
+                            text == annotation::kPropertyWrite ||
+                            text == annotation::kDefineEvent || text == "事件";
   ClassDecl* synthetic = EnsureTopLevelClass(unit);
   if (member_start) {
     const bool parsed = ParseClassBodyItem(synthetic);
@@ -207,7 +204,7 @@ bool Parser::ParseTopLevelItem(Unit* unit) {
     if (!synthetic->members.empty()) {
       Member& member = synthetic->members.back();
       Annotation forced;
-      forced.name = "强制输出";
+      forced.name = annotation::kForcedOutput;
       AnnotationArgument argument;
       argument.value = "真";
       forced.arguments.push_back(argument);
@@ -231,7 +228,7 @@ bool Parser::ParseTopLevelItem(Unit* unit) {
     method.position = statement->position;
     method.declaration_line = static_cast<int>(statement->position.line) + 1;
     Annotation forced;
-    forced.name = "强制输出";
+    forced.name = annotation::kForcedOutput;
     AnnotationArgument argument;
     argument.value = "真";
     forced.arguments.push_back(argument);
@@ -279,6 +276,7 @@ bool Parser::ParseAnnotation(Annotation* annotation) {
     ErrorAt(position, "注解缺少名称");
     return false;
   }
+  annotation->symbol_position = position;
   annotation->position = Peek().position;
   std::string name = Next().text;
   while (MatchSymbol(".")) {
@@ -338,7 +336,7 @@ bool Parser::ParseAnnotation(Annotation* annotation) {
     return false;
   }
 
-  if (annotation->name == "布局配置") {
+  if (annotation->name == annotation::kLayoutConfig) {
     for (const AnnotationArgument& argument : annotation->arguments) {
       if (argument.value.find('{') == std::string::npos)
         continue;
@@ -498,19 +496,19 @@ bool Parser::ParseClassBodyItem(ClassDecl* class_decl) {
       ParseMethod(class_decl, member, "方法");
       return true;
     }
-    if (Check("属性读")) {
+    if (Check(annotation::kPropertyRead)) {
       member.kind = MemberKind::kPropertyRead;
       Next();
       ParseMethod(class_decl, member, "属性");
       return true;
     }
-    if (Check("属性写")) {
+    if (Check(annotation::kPropertyWrite)) {
       member.kind = MemberKind::kPropertyWrite;
       Next();
       ParseMethod(class_decl, member, "属性");
       return true;
     }
-    if (Check("定义事件")) {
+    if (Check(annotation::kDefineEvent)) {
       member.kind = MemberKind::kEventDefinition;
       Next();
       if (Peek().kind == TokenKind::kIdentifier) {
@@ -566,8 +564,8 @@ void Parser::SynchronizeToDeclaration() {
   while (!IsAtEnd()) {
     if (Peek().begins_line) {
       if (Check("类") || Check("结束") || Check("变量") || Check("常量") || Check("方法") ||
-          Check("属性读") || Check("属性写") || Check("定义事件") || Check("事件") ||
-          CheckSymbol("@")) {
+          Check(annotation::kPropertyRead) || Check(annotation::kPropertyWrite) ||
+          Check(annotation::kDefineEvent) || Check("事件") || CheckSymbol("@")) {
         return;
       }
     }
@@ -580,9 +578,9 @@ void Parser::ParseMethod(ClassDecl* class_decl, Member& member, const std::strin
     Next();
     ExpectSymbol("]", "']'");
     if (MatchSymbol("="))
-      member.name = "[]=";
+      member.name = kOperatorIndexAssign;
     else
-      member.name = "[]";
+      member.name = kOperatorIndex;
   } else if (Peek().kind == TokenKind::kIdentifier) {
     member.name_position = Peek().position;
     member.name = Next().text;
@@ -1446,4 +1444,4 @@ ExprPtr Parser::ParsePrimary() {
   return MakeExpr(ExprKind::kUnknown, token.position);
 }
 
-}  // namespace tiecodec
+}

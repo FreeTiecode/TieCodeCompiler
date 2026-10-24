@@ -13,24 +13,8 @@
 namespace tiecodec {
 namespace {
 
-bool IsIdentifierStartByte(unsigned char byte) {
-  return byte >= 0x80 || std::isalpha(byte) != 0 || byte == '_';
-}
-
 bool IsIdentifierByteValue(unsigned char byte) {
   return byte >= 0x80 || std::isalnum(byte) != 0 || byte == '_';
-}
-
-bool IsIdentifierText(const std::string& text) {
-  if (text.empty())
-    return false;
-  if (!IsIdentifierStartByte(static_cast<unsigned char>(text[0])))
-    return false;
-  for (unsigned char byte : text) {
-    if (!IsIdentifierByteValue(byte))
-      return false;
-  }
-  return true;
 }
 
 std::string ReplaceIdentifier(const std::string& text, const std::string& from,
@@ -69,7 +53,7 @@ std::string TrimTypeText(const std::string& type_name) {
   return type_name.substr(begin, end - begin);
 }
 
-}  // namespace
+}
 
 bool JavaEmitter::IsGenericClass(const ClassInfo& klass) const {
   return klass.declaration != nullptr && !klass.declaration->generic_parameters.empty();
@@ -238,7 +222,7 @@ std::string JavaEmitter::MapGenericAwareType(const ClassInfo& klass, const std::
   record_imports_for_spec_ = record_imports && spec_imports_ != nullptr;
   std::string text = TrimTypeText(type_name);
   int dimensions = 0;
-  while (text.size() >= 2 && text.compare(text.size() - 2, 2, "[]") == 0) {
+  while (EndsWith(text, kOperatorIndex)) {
     text = TrimTypeText(text.substr(0, text.size() - 2));
     ++dimensions;
   }
@@ -301,7 +285,7 @@ void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::s
                                             std::set<std::string>* imports, bool base_only) {
   std::string text = SubstituteGenericType(type_name);
   text = TrimTypeText(text);
-  while (text.size() >= 2 && text.compare(text.size() - 2, 2, "[]") == 0) {
+  while (EndsWith(text, kOperatorIndex)) {
     text = TrimTypeText(text.substr(0, text.size() - 2));
   }
   while (!text.empty() && text.back() == '?')
@@ -320,8 +304,6 @@ void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::s
   }
   imports->insert(names_.Package(*base_class) + "." + output_name);
   {
-    // A specialization extends the specialization of its generic base class;
-    // reference output imports that base specialization for the used type.
     std::string base_base_name;
     std::vector<std::string> base_base_arguments;
     std::string substituted_base = base_class->declaration->base_name;
@@ -345,7 +327,7 @@ void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::s
     std::string stripped = TrimTypeText(argument);
     while (!stripped.empty() && stripped.back() == '?')
       stripped.pop_back();
-    while (stripped.size() >= 2 && stripped.compare(stripped.size() - 2, 2, "[]") == 0) {
+    while (EndsWith(stripped, kOperatorIndex)) {
       stripped = TrimTypeText(stripped.substr(0, stripped.size() - 2));
     }
     std::string nested_base;
@@ -416,9 +398,7 @@ std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& in
   spec_imports_ = saved_imports;
 
   std::set<std::string> imports = local_imports;
-  const auto r_namespace = config_.options.find("r-namespace");
-  imports.insert(
-      (r_namespace == config_.options.end() ? config_.namespace_name : r_namespace->second) + ".R");
+  imports.insert(config_.Option(option::kRNamespace, config_.namespace_name) + ".R");
 
   std::string text = "package " + names_.Package(base) + ";\n\n";
   for (const std::string& import : imports)
@@ -434,4 +414,4 @@ std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& in
   return text;
 }
 
-}  // namespace tiecodec
+}

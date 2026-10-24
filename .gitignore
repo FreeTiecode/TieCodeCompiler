@@ -5,3 +5,7 @@ tools/
 myeasylog.log
 __pycache__/
 .DS_Store
+.codex/
+.claude/
+.workbuddy
+.gradle/

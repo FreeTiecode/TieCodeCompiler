@@ -11,14 +11,12 @@ public:
 
   virtual bool Write(const std::string& relative_path, const std::string& content) = 0;
 
-  /// Copy an external file into the output tree (resources, icons).
   virtual bool CopyFile(const std::string& source_path, const std::string& relative_path) {
     (void)source_path;
     (void)relative_path;
     return false;
   }
 
-  /// Ensure an empty directory exists in the output tree.
   virtual void CreateDirectory(const std::string& relative_path) {
     (void)relative_path;
   }
@@ -35,6 +33,6 @@ private:
   std::string root_;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

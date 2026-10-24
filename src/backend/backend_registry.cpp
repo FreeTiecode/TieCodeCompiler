@@ -38,4 +38,4 @@ std::unique_ptr<Backend> CreateBackend(const std::string& platform, const Symbol
   return BackendRegistry::Default().Create(platform, symbols);
 }
 
-}  // namespace tiecodec
+}

@@ -49,6 +49,6 @@ bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* e
 
 std::string UsageText();
 
-}  // namespace tiecodec
+}
 
 #endif

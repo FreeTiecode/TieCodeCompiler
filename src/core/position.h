@@ -11,6 +11,6 @@ struct SourcePosition {
   std::size_t offset = 0;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

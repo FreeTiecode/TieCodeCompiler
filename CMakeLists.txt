@@ -13,6 +13,7 @@ set(TIECODEC_CORE_SOURCES
   src/core/diagnostics.cpp
   src/core/source.cpp
   src/core/text_util.cpp
+  src/core/file_search.cpp
   src/frontend/ast.cpp
   src/frontend/lexer.cpp
   src/frontend/parser.cpp
@@ -23,6 +24,7 @@ set(TIECODEC_CORE_SOURCES
   src/analysis/program.cpp
   src/analysis/local_use.cpp
   src/analysis/annotation_rules.cpp
+  src/analysis/unused_locals.cpp
   src/analysis/compile_conditions.cpp
   src/backend/output_sink.cpp
   src/backend/backend_registry.cpp
@@ -62,78 +64,18 @@ target_link_libraries(tiecodec PRIVATE tiecodec_core)
 
 enable_testing()
 
-set(VALIDATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/validation")
-set(BASELINE_COMPILER "${CMAKE_CURRENT_SOURCE_DIR}/../prebuilt/cli/linux/x86_64/tiec")
+find_package(GTest 1.10 REQUIRED)
+include(GoogleTest)
 
-if(EXISTS "${VALIDATION_DIR}/check_stdlib.sh")
-  add_test(NAME tiecodec_stdlib_parse
-    COMMAND ${VALIDATION_DIR}/check_stdlib.sh
-            $<TARGET_FILE:tiecodec>
-            ${CMAKE_CURRENT_SOURCE_DIR}/../stdlibs/安卓基本库/源代码)
+add_executable(tiecodec_tests
+  tests/layering_test.cpp
+  tests/smoke_test.cpp)
+target_link_libraries(tiecodec_tests PRIVATE tiecodec_core GTest::gtest GTest::gtest_main)
 
-  add_test(NAME tiecodec_stdlib_parity
-    COMMAND ${VALIDATION_DIR}/check_stdlib_parity.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
+target_compile_definitions(tiecodec_tests
+  PRIVATE TIECODEC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  PRIVATE TIECODEC_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
-  add_test(NAME tiecodec_real_projects
-    COMMAND ${VALIDATION_DIR}/check_real_projects.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_cli
-    COMMAND ${VALIDATION_DIR}/check_cli.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_android_annotations
-    COMMAND ${VALIDATION_DIR}/check_android_annotations.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_stdlib_lint
-    COMMAND ${VALIDATION_DIR}/check_stdlib_lint.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_async
-    COMMAND ${VALIDATION_DIR}/check_async.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_friendly_names
-    COMMAND ${VALIDATION_DIR}/check_friendly_names.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_line_map
-    COMMAND ${VALIDATION_DIR}/check_line_map.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_gradle
-    COMMAND ${VALIDATION_DIR}/check_gradle.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_hard_mode
-    COMMAND ${VALIDATION_DIR}/check_hard_mode.sh
-            $<TARGET_FILE:tiecodec>
-            ${BASELINE_COMPILER})
-
-  add_test(NAME tiecodec_cases
-    COMMAND ${VALIDATION_DIR}/run_tests.sh
-            $<TARGET_FILE:tiecodec>
-            ${VALIDATION_DIR}
-            ${BASELINE_COMPILER})
-endif()
-
-set(SELF_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests")
-if(EXISTS "${SELF_TEST_DIR}/check_layering.sh")
-  add_test(NAME tiecodec_layering
-    COMMAND bash "${SELF_TEST_DIR}/check_layering.sh")
-endif()
-if(EXISTS "${SELF_TEST_DIR}/smoke.sh")
-  add_test(NAME tiecodec_smoke
-    COMMAND bash "${SELF_TEST_DIR}/smoke.sh" $<TARGET_FILE:tiecodec>)
-endif()
+gtest_discover_tests(tiecodec_tests
+  PROPERTIES ENVIRONMENT "TIECODEC_TEST_COMPILER=$<TARGET_FILE:tiecodec>"
+  DISCOVERY_MODE PRE_TEST)

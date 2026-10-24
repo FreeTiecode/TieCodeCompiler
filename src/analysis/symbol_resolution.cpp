@@ -60,4 +60,23 @@ const Member* ResolveGlobalMethod(const SymbolTable& symbols, const ClassInfo& c
   return nullptr;
 }
 
-}  // namespace tiecodec
+const ClassInfo* BaseClassOf(const SymbolTable& symbols, const ClassInfo& klass) {
+  if (klass.declaration == nullptr || klass.declaration->base_name.empty())
+    return nullptr;
+  return symbols.Resolve(klass.declaration->base_name, &klass);
+}
+
+bool DerivesFrom(const SymbolTable& symbols, const ClassInfo* derived, const ClassInfo* base) {
+  if (derived == nullptr || base == nullptr)
+    return false;
+  const ClassInfo* cursor = derived;
+  std::set<const ClassInfo*> visited;
+  while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
+    if (cursor == base)
+      return true;
+    cursor = BaseClassOf(symbols, *cursor);
+  }
+  return false;
+}
+
+}

@@ -17,13 +17,16 @@
 
 namespace tiecodec {
 
+inline constexpr int kClassMemberIndentLevel = 1;
+inline constexpr int kMethodBodyIndentLevel = 2;
+inline constexpr int kAsyncStateBodyIndentLevel = 3;
+inline constexpr int kAnonymousClassBodyOffset = 2;
+
 struct LineRef {
   std::string file;
   int line = 0;
 };
 
-/// std::string that remembers which source line each emitted output line came
-/// from (used for the line map / retrace support).
 class EmittedText : public std::string {
 public:
   EmittedText& operator+=(const std::string& value) {
@@ -95,13 +98,10 @@ public:
 
   ClassOutput EmitClass(const ClassInfo& klass);
 
-  /// Context/state-machine classes generated for async methods of the class
-  /// just emitted (drained by the backend).
   std::vector<std::pair<std::string, std::string>> TakeAuxiliaryClasses();
 
-  /// Runs source-level lint/type diagnostics over every declared member before
-  /// any output is generated.
   void RunAnalysisLints();
+  void RemoveUnusedLocalsAfterLint();
 
   struct GenericInstantiation {
     const ClassInfo* base = nullptr;
@@ -109,17 +109,12 @@ public:
     std::string output_name;
   };
 
-  /// Generic instantiations discovered while emitting type references.
   std::vector<GenericInstantiation> TakePendingGenericInstantiations();
 
-  /// Emits the Java class for one generic instantiation (types substituted).
   std::string EmitGenericInstantiation(const GenericInstantiation& instantiation);
 
-  /// True when the class declares generic parameters.
   bool IsGenericClass(const ClassInfo& klass) const;
 
-  /// Classes required in the output because of generic instantiations
-  /// (specialization shells and type arguments).
   std::vector<const ClassInfo*> TakeGenericNeededClasses();
 
 private:
@@ -147,7 +142,6 @@ private:
   std::string EmitInlineArgument(const ClassInfo& klass, const Expr* argument);
   bool EmitSubscriptions(const ClassInfo& klass, int indent, EmittedText* body);
 
-  // ---- lint / constant folding ----
   bool LintDisabled(const std::string& key) const;
   void AnalyzeMember(const ClassInfo& klass, const Member& member);
   void LintAutoCast(const ClassInfo& klass, const SourcePosition& position,
@@ -169,7 +163,6 @@ private:
   void LintStaticAccess(const ClassInfo& klass, const SourcePosition& position,
                         const std::string& name);
 
-  // ---- async method state machine ----
   bool IsAsyncMember(const Member& member) const;
   bool EmitAsyncMember(const ClassInfo& klass, const Member& member, EmittedText* body);
   std::string AsyncContextTypeName(const ClassInfo& klass, const Member& member) const;
@@ -284,12 +277,13 @@ private:
   std::string lint_return_type_;
   bool lint_returns_value_ = false;
   std::vector<std::pair<std::string, std::string>> auxiliary_classes_;
+  std::vector<std::string> pending_async_machines_;
   std::map<const Expr*, std::string> await_replacements_;
   std::set<std::string> reported_;
   std::set<const ClassInfo*> emitted_;
   bool suppress_code_block_blank_ = false;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

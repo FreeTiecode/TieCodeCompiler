@@ -33,7 +33,7 @@ std::string SimpleName(const std::string& qualified_name) {
   return dot == std::string::npos ? qualified_name : qualified_name.substr(dot + 1);
 }
 
-}  // namespace
+}
 
 namespace {
 
@@ -58,7 +58,7 @@ std::vector<std::string> SplitTopLevelArguments(const std::string& text) {
   return arguments;
 }
 
-}  // namespace
+}
 
 std::string JavaTypeMapper::MapType(const std::string& type_name,
                                     const ClassInfo* context_class) const {
@@ -111,4 +111,4 @@ bool JavaTypeMapper::IsNativeType(const std::string& type_name,
   return klass != nullptr && klass->has_java_alias;
 }
 
-}  // namespace tiecodec
+}

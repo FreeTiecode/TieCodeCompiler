@@ -4,24 +4,130 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include "backend_registry.h"
+#include "constants.h"
+#include "text_util.h"
 
 namespace tiecodec {
 namespace {
 
-std::string PlatformUsage() {
-  std::string usage;
-  for (const std::string& platform : BackendRegistry::Default().platforms()) {
-    if (!usage.empty())
-      usage += ", ";
-    usage += platform;
+const std::vector<std::string> kSourceVersions = {"40", "46", "47"};
+const std::vector<std::string> kKnownPlatforms = {"android", "harmony", "linux",
+                                                  "windows", "ios",     "html"};
+constexpr int kMinOptimizeLevel = 0;
+constexpr int kMaxOptimizeLevel = 3;
+constexpr const char* kGradleModeName = "gradle";
+
+using OptionHandler = void (*)(CliCommand&, const std::string&);
+
+struct OptionSpec {
+  const char* name;
+  const char* alias;
+  bool takes_value;
+  OptionHandler apply;
+};
+
+const OptionSpec kOptions[] = {
+    {"-h", "--help", false, [](CliCommand& command, const std::string&) { command.help = true; }},
+    {"-o", "--output", true,
+     [](CliCommand& command, const std::string& value) { command.output_dir = value; }},
+    {"-p", "--package", true,
+     [](CliCommand& command, const std::string& value) { command.package_name = value; }},
+    {"--dir", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.source_dirs.push_back(value); }},
+    {"--platform", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.platform = value; }},
+    {"--release", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.release = true; }},
+    {"--debug", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.release = false; }},
+    {"--friendly-name", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.friendly_name = value; }},
+    {"--app-name", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.app_name = value; }},
+    {"--version-name", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.version_name = value; }},
+    {"--dump-ast", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.dump_ast = true; }},
+    {"--check", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.check_only = true; }},
+    {"--keep-defaults", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.keep_defaults = true; }},
+    {"-d", "--define", true,
+     [](CliCommand& command, const std::string& value) {
+       const std::size_t equals = value.find('=');
+       if (equals == std::string::npos) {
+         command.defines.emplace_back(value, kLiteralTrue);
+         return;
+       }
+       command.defines.emplace_back(value.substr(0, equals), value.substr(equals + 1));
+     }},
+    {"--source", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.source_version = value; }},
+    {"--hard-mode", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.hard_mode = true; }},
+    {"--enable-toplevel-stmt", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.enable_toplevel_stmt = true; }},
+    {"--profile", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.profile = value; }},
+    {"--optimize", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.optimize = value; }},
+    {"--disable-lint", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.disable_lint.push_back(value); }},
+    {"--log-level", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.log_level = value; }},
+    {"--emit-names", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.emit_names = value; }},
+    {"--stable-names", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.stable_names = value; }},
+    {"--search-lib-prefix", nullptr, true,
+     [](CliCommand& command, const std::string& value) {
+       command.search_lib_prefixes.push_back(value);
+     }},
+    {"--search-source-prefix", nullptr, true,
+     [](CliCommand& command, const std::string& value) {
+       command.search_source_prefixes.push_back(value);
+     }},
+    {"--search-res-prefix", nullptr, true,
+     [](CliCommand& command, const std::string& value) {
+       command.search_res_prefixes.push_back(value);
+     }},
+    {"--search-assets-prefix", nullptr, true,
+     [](CliCommand& command, const std::string& value) {
+       command.search_assets_prefixes.push_back(value);
+     }},
+    {"--line-map", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.line_map = value; }},
+    {"--retrace-batch", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.retrace_batch = value; }},
+    {"--android.app.config", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.android_app_config = value; }},
+    {"--android.legacy.lib.path", nullptr, true,
+     [](CliCommand& command, const std::string& value) {
+       command.android_legacy_lib_path = value;
+     }},
+    {"--android.gradle", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.android_gradle = kGradleModeName; }},
+};
+
+const OptionSpec* FindOption(const std::string& argument) {
+  for (const OptionSpec& option : kOptions) {
+    if (argument == option.name)
+      return &option;
+    if (option.alias != nullptr && argument == option.alias)
+      return &option;
   }
-  return usage;
+  return nullptr;
+}
+
+std::string PlatformUsage() {
+  return JoinStrings(BackendRegistry::Default().platforms(), ", ");
 }
 
 std::string BuildUsage() {
-  const std::string platforms = PlatformUsage();
   std::ostringstream out;
   out << "用法: tiecodec [选项] <源文件...>\n\n"
       << "编译选项:\n"
@@ -29,16 +135,18 @@ std::string BuildUsage() {
       << "  -p, --package <包名>             设置默认包名\n"
       << "  -d, --define <宏>=<值>           定义编译条件变量\n"
       << "  --dir <目录>                     递归扫描目录下所有源文件\n"
-      << "  --source <版本>                  源码文件版本 (40, 46, 47)\n"
+      << "  --source <版本>                  源码文件版本 (" << JoinStrings(kSourceVersions, ", ")
+      << ")\n"
       << "  --debug                          调试模式（默认）\n"
       << "  --release                        发布模式\n"
       << "  --hard-mode                      硬输出模式\n"
       << "  --enable-toplevel-stmt           开启顶级语句语法特性支持\n"
       << "  --profile <模式>                 部署模式 (standard, designer)\n"
-      << "  --optimize <级别>                优化级别 (0-3，默认1)\n"
+      << "  --optimize <级别>                优化级别 (" << kMinOptimizeLevel << "-"
+      << kMaxOptimizeLevel << "，默认1)\n"
       << "  --disable-lint <名称>            禁用指定 lint 检查\n"
       << "  --log-level <级别>               日志级别 (debug, info, warning, error)\n"
-      << "  --platform <平台>                目标平台（可用: " << platforms << "）\n"
+      << "  --platform <平台>                目标平台（可用: " << PlatformUsage() << "）\n"
       << "  --friendly-name <模式>           符号名称模式 (random, pinyin, original)\n"
       << "  --emit-names <路径>              生成稳定输出名并保存映射表\n"
       << "  --stable-names <路径>            读取稳定名称映射表\n"
@@ -58,7 +166,29 @@ std::string BuildUsage() {
   return out.str();
 }
 
-}  // namespace
+bool IsKnownPlatform(const std::string& platform) {
+  return std::find(kKnownPlatforms.begin(), kKnownPlatforms.end(), platform) !=
+         kKnownPlatforms.end();
+}
+
+bool ValidateOptimizeLevel(const std::string& optimize, std::string* error) {
+  const bool numeric =
+      !optimize.empty() &&
+      std::all_of(optimize.begin(), optimize.end(), [](char c) { return c >= '0' && c <= '9'; });
+  if (!numeric) {
+    *error = "无效的优化级别: " + optimize;
+    return false;
+  }
+  const long level = std::strtol(optimize.c_str(), nullptr, 10);
+  if (level < kMinOptimizeLevel || level > kMaxOptimizeLevel) {
+    *error = "优化级别必须在 " + std::to_string(kMinOptimizeLevel) + "-" +
+             std::to_string(kMaxOptimizeLevel) + " 之间";
+    return false;
+  }
+  return true;
+}
+
+}
 
 std::string UsageText() {
   return BuildUsage();
@@ -67,178 +197,6 @@ std::string UsageText() {
 bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* error) {
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
-    const auto value = [&](const char* flag) -> const char* {
-      if (i + 1 >= argc) {
-        *error = std::string(flag) + " 选项需要参数";
-        return nullptr;
-      }
-      return argv[++i];
-    };
-    if (argument == "-h" || argument == "--help") {
-      command->help = true;
-      continue;
-    }
-    if (argument == "-o" || argument == "--output") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->output_dir = v;
-      continue;
-    }
-    if (argument == "-p" || argument == "--package") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->package_name = v;
-      continue;
-    }
-    if (argument == "--dir") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->source_dirs.emplace_back(v);
-      continue;
-    }
-    if (argument == "--platform") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->platform = v;
-      continue;
-    }
-    if (argument == "--release") {
-      command->release = true;
-      continue;
-    }
-    if (argument == "--debug") {
-      command->release = false;
-      continue;
-    }
-    if (argument == "--friendly-name") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->friendly_name = v;
-      continue;
-    }
-    if (argument == "--app-name") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->app_name = v;
-      continue;
-    }
-    if (argument == "--version-name") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->version_name = v;
-      continue;
-    }
-    if (argument == "--dump-ast") {
-      command->dump_ast = true;
-      continue;
-    }
-    if (argument == "--check") {
-      command->check_only = true;
-      continue;
-    }
-    if (argument == "--keep-defaults") {
-      command->keep_defaults = true;
-      continue;
-    }
-    if (argument == "-d" || argument == "--define") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      const std::string definition = v;
-      const std::size_t equals = definition.find('=');
-      if (equals == std::string::npos) {
-        command->defines.emplace_back(definition, "真");
-      } else {
-        command->defines.emplace_back(definition.substr(0, equals), definition.substr(equals + 1));
-      }
-      continue;
-    }
-    if (argument == "--source") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->source_version = v;
-      continue;
-    }
-    if (argument == "--hard-mode") {
-      command->hard_mode = true;
-      continue;
-    }
-    if (argument == "--enable-toplevel-stmt") {
-      command->enable_toplevel_stmt = true;
-      continue;
-    }
-    if (argument == "--profile") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->profile = v;
-      continue;
-    }
-    if (argument == "--optimize") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->optimize = v;
-      continue;
-    }
-    if (argument == "--disable-lint") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->disable_lint.emplace_back(v);
-      continue;
-    }
-    if (argument == "--log-level") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->log_level = v;
-      continue;
-    }
-    if (argument == "--emit-names") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->emit_names = v;
-      continue;
-    }
-    if (argument == "--stable-names") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->stable_names = v;
-      continue;
-    }
-    if (argument == "--search-lib-prefix" || argument == "--search-source-prefix" ||
-        argument == "--search-res-prefix" || argument == "--search-assets-prefix") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      if (argument == "--search-lib-prefix")
-        command->search_lib_prefixes.emplace_back(v);
-      else if (argument == "--search-source-prefix")
-        command->search_source_prefixes.emplace_back(v);
-      else if (argument == "--search-res-prefix")
-        command->search_res_prefixes.emplace_back(v);
-      else
-        command->search_assets_prefixes.emplace_back(v);
-      continue;
-    }
-    if (argument == "--line-map") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->line_map = v;
-      continue;
-    }
     if (argument == "--retrace") {
       if (i + 3 >= argc) {
         *error = "选项缺少参数: --retrace";
@@ -249,69 +207,37 @@ bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* e
       command->retrace_line = argv[++i];
       continue;
     }
-    if (argument == "--retrace-batch") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
+    const OptionSpec* option = FindOption(argument);
+    if (option == nullptr) {
+      if (!argument.empty() && argument[0] == '-') {
+        *error = "未知选项: " + argument;
         return false;
-      command->retrace_batch = v;
+      }
+      command->sources.push_back(argument);
       continue;
     }
-    if (argument == "--android.app.config") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->android_app_config = v;
+    if (!option->takes_value) {
+      option->apply(*command, std::string());
       continue;
     }
-    if (argument == "--android.legacy.lib.path") {
-      const char* v = value(argument.c_str());
-      if (v == nullptr)
-        return false;
-      command->android_legacy_lib_path = v;
-      continue;
-    }
-    if (argument == "--android.gradle") {
-      command->android_gradle = "gradle";
-      continue;
-    }
-    if (!argument.empty() && argument[0] == '-') {
-      *error = "未知选项: " + argument;
+    if (i + 1 >= argc) {
+      *error = argument + " 选项需要参数";
       return false;
     }
-    command->sources.push_back(argument);
+    option->apply(*command, argv[++i]);
   }
+
   if (command->help)
     return true;
   if (!command->retrace_map.empty() || !command->retrace_batch.empty())
     return true;
   if (command->check_only)
     return true;
-  if (!command->optimize.empty()) {
-    const std::string& optimize = command->optimize;
-    const bool numeric =
-        !optimize.empty() &&
-        std::all_of(optimize.begin(), optimize.end(), [](char c) { return c >= '0' && c <= '9'; });
-    if (!numeric) {
-      *error = "无效的优化级别: " + optimize;
-      return false;
-    }
-    const long level = std::strtol(optimize.c_str(), nullptr, 10);
-    if (level < 0 || level > 3) {
-      *error = "优化级别必须在 0-3 之间";
-      return false;
-    }
-  }
-  {
-    static const char* kPlatforms[] = {"android", "harmony", "linux", "windows", "ios", "html"};
-    bool known_platform = false;
-    for (const char* platform : kPlatforms) {
-      if (command->platform == platform)
-        known_platform = true;
-    }
-    if (!known_platform) {
-      *error = "不支持的目标平台: " + command->platform;
-      return false;
-    }
+  if (!command->optimize.empty() && !ValidateOptimizeLevel(command->optimize, error))
+    return false;
+  if (!IsKnownPlatform(command->platform)) {
+    *error = "不支持的目标平台: " + command->platform;
+    return false;
   }
   if (command->output_dir.empty()) {
     *error = "未指定输出目录 (-o/--output)";
@@ -324,4 +250,4 @@ bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* e
   return true;
 }
 
-}  // namespace tiecodec
+}

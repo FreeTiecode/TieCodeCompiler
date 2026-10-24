@@ -9,8 +9,12 @@
 
 #include <filesystem>
 #include <regex>
+#include "constants.h"
+#include "file_search.h"
 #include "java_names.h"
 #include "symbol_resolution.h"
+#include "text_util.h"
+#include "unused_locals.h"
 
 namespace tiecodec {
 namespace {
@@ -21,18 +25,6 @@ bool HasAnnotationName(const std::vector<Annotation>& annotations, const std::st
       return true;
   }
   return false;
-}
-
-bool ConstantCondition(const Expr* expression, bool* value) {
-  if (expression == nullptr)
-    return false;
-  ConstantValue constant;
-  if (!FoldConstant(*expression, &constant))
-    return false;
-  if (constant.kind != ConstantValue::Kind::kBoolean)
-    return false;
-  *value = constant.boolean;
-  return true;
 }
 
 bool ListAlwaysReturns(const std::vector<StmtPtr>& statements);
@@ -118,9 +110,7 @@ std::string PrimitiveNameOf(const ClassInfo& info) {
   for (const Annotation& annotation : info.declaration->annotations) {
     if (annotation.name != "指代类")
       continue;
-    std::string value = annotation.StringArgument("参数");
-    if (value.empty() && !annotation.arguments.empty())
-      value = annotation.arguments.front().value;
+    const std::string value = annotation.TextArgument(kArgumentParameter);
     if (!value.empty())
       return value;
   }
@@ -165,31 +155,23 @@ int PrimitiveCategory(const std::string& name) {
   return -1;
 }
 
-}  // namespace
+}
 
 bool JavaEmitter::LintDisabled(const std::string& key) const {
-  const auto disabled = config_.options.find("disable-lint");
-  if (disabled == config_.options.end())
+  const std::string list = config_.Option(option::kDisableLint);
+  if (list.empty())
     return false;
-  const std::string& list = disabled->second;
   if (list == "all")
     return true;
-  std::size_t begin = 0;
-  while (begin <= list.size()) {
-    const std::size_t comma = list.find(',', begin);
-    const std::string item =
-        list.substr(begin, comma == std::string::npos ? std::string::npos : comma - begin);
+  for (const std::string& item : SplitDelimited(list, ',')) {
     if (item == key)
       return true;
-    if (comma == std::string::npos)
-      break;
-    begin = comma + 1;
   }
   return false;
 }
 
 bool JavaEmitter::HasStaticAnnotation(const Member& member) const {
-  return HasAnnotationName(member.annotations, "静态");
+  return HasAnnotationName(member.annotations, annotation::kStatic);
 }
 
 bool JavaEmitter::HasAnnotationMember(const Member& member, const std::string& name) const {
@@ -209,8 +191,10 @@ bool JavaEmitter::IsResourceType(const ClassInfo& info) const {
   if (info.declaration == nullptr)
     return false;
   for (const Annotation& annotation : info.declaration->annotations) {
-    if (annotation.name == "值输出规则" || annotation.name == "需求值类型" ||
-        annotation.name == "常量类型" || annotation.name == "常量值") {
+    if (annotation.name == annotation::kValueOutputRule ||
+        annotation.name == annotation::kRequiredValueType ||
+        annotation.name == annotation::kConstantType ||
+        annotation.name == annotation::kConstantValue) {
       return true;
     }
   }
@@ -248,21 +232,8 @@ bool JavaEmitter::TypesCompatible(const ClassInfo& klass, const std::string& tar
   if (!target_primitive.empty() && !source_primitive.empty()) {
     return PrimitiveRank(target_primitive) >= 0 && PrimitiveRank(source_primitive) >= 0;
   }
-  const auto derives_from = [this](const ClassInfo* derived, const ClassInfo* base) {
-    if (derived == nullptr || base == nullptr)
-      return false;
-    const ClassInfo* cursor = derived;
-    std::set<const ClassInfo*> visited;
-    while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
-      if (cursor == base)
-        return true;
-      if (cursor->declaration->base_name.empty())
-        break;
-      cursor = symbols_.Resolve(cursor->declaration->base_name, cursor);
-    }
-    return false;
-  };
-  if (derives_from(target_class, source_class) || derives_from(source_class, target_class)) {
+  if (DerivesFrom(symbols_, target_class, source_class) ||
+      DerivesFrom(symbols_, source_class, target_class)) {
     return true;
   }
   return false;
@@ -288,16 +259,7 @@ bool JavaEmitter::IsUnsafeCast(const ClassInfo& klass, const std::string& source
     return source_rank > target_rank;
   if (source_rank >= 0 || target_rank >= 0)
     return false;
-  const ClassInfo* cursor = target;
-  std::set<const ClassInfo*> visited;
-  while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
-    if (cursor == source)
-      return true;
-    if (cursor->declaration->base_name.empty())
-      break;
-    cursor = symbols_.Resolve(cursor->declaration->base_name, cursor);
-  }
-  return false;
+  return DerivesFrom(symbols_, target, source);
 }
 
 const ClassInfo* JavaEmitter::LintReceiverClass(const ClassInfo& klass,
@@ -353,20 +315,20 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
   switch (expression.kind) {
     case ExprKind::kLiteral: {
       if (expression.text == "真" || expression.text == "假")
-        return "逻辑型";
+        return builtin_type::kBoolean;
       if (!expression.raw.empty() && (expression.raw[0] == '"' || expression.raw[0] == '\'')) {
-        return "文本";
+        return builtin_type::kText;
       }
       if (expression.text.size() > 1 && expression.text[0] == '0' &&
           (expression.text[1] == 'x' || expression.text[1] == 'X')) {
-        return "整数";
+        return builtin_type::kInteger;
       }
       if (expression.text.find('.') != std::string::npos ||
           expression.text.find('e') != std::string::npos ||
           expression.text.find('E') != std::string::npos) {
-        return "小数";
+        return builtin_type::kDecimal;
       }
-      return "整数";
+      return builtin_type::kInteger;
     }
     case ExprKind::kIdentifier: {
       const auto local = lint_types_.find(expression.text);
@@ -394,7 +356,7 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
         return {};
       const std::string receiver_type = InferTypeName(klass, *expression.children[0]);
       if (!receiver_type.empty() && receiver_type.back() == ']') {
-        return expression.text == "长度" ? std::string("整数") : std::string();
+        return expression.text == "长度" ? std::string(builtin_type::kInteger) : std::string();
       }
       const ClassInfo* receiver = LintReceiverClass(klass, *expression.children[0]);
       if (receiver == nullptr)
@@ -453,12 +415,22 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
       const std::string array_type = InferTypeName(klass, *expression.children[0]);
       if (array_type.empty())
         return {};
-      std::string element = array_type;
-      const std::size_t bracket = element.find('[');
-      if (bracket == std::string::npos)
+      const std::size_t bracket = array_type.find('[');
+      if (bracket == std::string::npos) {
+        const ClassInfo* receiver = symbols_.Resolve(BaseResolvableName(array_type), &klass);
+        if (receiver == nullptr)
+          return {};
+        const ClassInfo* owner = nullptr;
+        if (const Member* indexer =
+                FindMemberInChain(symbols_, *receiver, kOperatorIndex, &owner)) {
+          return indexer->type_name;
+        }
         return {};
-      element = element.substr(0, bracket);
-      return BaseTypeName(element);
+      }
+      const std::size_t close = array_type.find(']', bracket);
+      const std::string rest =
+          close == std::string::npos ? std::string() : array_type.substr(close + 1);
+      return BaseTypeName(array_type.substr(0, bracket)) + rest;
     }
     case ExprKind::kParen:
       if (expression.children.size() == 1 && expression.children[0] != nullptr) {
@@ -467,7 +439,7 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
       return {};
     case ExprKind::kUnary: {
       if (expression.text == "非")
-        return "逻辑型";
+        return builtin_type::kBoolean;
       if (!expression.children.empty() && expression.children[0] != nullptr) {
         return InferTypeName(klass, *expression.children[0]);
       }
@@ -477,18 +449,18 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
       const std::string& op = expression.text;
       if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" ||
           op == "且" || op == "&&" || op == "或" || op == "||") {
-        return "逻辑型";
+        return builtin_type::kBoolean;
       }
       if (op == "+" || op == "&") {
         bool any_text = false;
         for (const ExprPtr& child : expression.children) {
           if (child == nullptr)
             continue;
-          if (InferTypeName(klass, *child) == "文本")
+          if (InferTypeName(klass, *child) == builtin_type::kText)
             any_text = true;
         }
         if (any_text)
-          return "文本";
+          return builtin_type::kText;
       }
       bool any_double = false;
       bool any_long = false;
@@ -496,16 +468,16 @@ std::string JavaEmitter::InferTypeName(const ClassInfo& klass, const Expr& expre
         if (child == nullptr)
           continue;
         const std::string type = InferTypeName(klass, *child);
-        if (type == "小数")
+        if (type == builtin_type::kDecimal)
           any_double = true;
-        if (type == "长整数")
+        if (type == builtin_type::kLongInteger)
           any_long = true;
       }
       if (any_double)
-        return "小数";
+        return builtin_type::kDecimal;
       if (any_long)
-        return "长整数";
-      return "整数";
+        return builtin_type::kLongInteger;
+      return builtin_type::kInteger;
     }
     default:
       return {};
@@ -606,7 +578,7 @@ void JavaEmitter::RunAnalysisLints() {
         }
         cursor = symbols_.Resolve(BaseResolvableName(cursor->declaration->base_name), cursor);
       }
-      if (cursor == nullptr || chain.size() < 2)
+      if (cursor == nullptr || cursor->declaration == nullptr || chain.empty())
         continue;
       const ClassInfo* reporter = nullptr;
       for (const ClassInfo* node : chain) {
@@ -624,7 +596,7 @@ void JavaEmitter::RunAnalysisLints() {
           continue;
         base = chain[(i + 1) % chain.size()];
       }
-      if (base == nullptr || base == reporter)
+      if (base == nullptr)
         continue;
       reported_cycles.insert(reporter);
       diagnostics_.Error(reporter->declaration->file, reporter->declaration->keyword_position,
@@ -639,8 +611,8 @@ void JavaEmitter::RunAnalysisLints() {
     if (klass.declaration == nullptr)
       return;
     const std::string base = BaseResolvableName(type_name);
-    if (base.empty() || base == "void" || base == "任意类型" || base == "任何类型" ||
-        base == "类型" || base == "变体型") {
+    if (base.empty() || base == "void" || base == builtin_type::kAnyType ||
+        base == builtin_type::kAnyTypeAlias || base == "类型" || base == builtin_type::kVariant) {
       return;
     }
     if (base.rfind("模板类型", 0) == 0)
@@ -744,6 +716,8 @@ void JavaEmitter::RunAnalysisLints() {
       AnalyzeMember(klass, member);
     }
   }
+
+  RemoveUnusedLocalsAfterLint();
 }
 
 void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
@@ -787,8 +761,8 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
     if (klass.declaration == nullptr)
       return;
     const std::string base = BaseResolvableName(type_name);
-    if (base.empty() || base == "void" || base == "任意类型" || base == "任何类型" ||
-        base == "类型" || base == "变体型") {
+    if (base.empty() || base == "void" || base == builtin_type::kAnyType ||
+        base == builtin_type::kAnyTypeAlias || base == "类型" || base == builtin_type::kVariant) {
       return;
     }
     if (base.rfind("模板类型", 0) == 0)
@@ -802,25 +776,6 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
     error(position, "找不到类\"" + base + "\"");
   };
 
-  const auto auto_creation_disabled = [this](const ClassInfo* type) {
-    if (type == nullptr)
-      return true;
-    std::set<const ClassInfo*> visited;
-    const ClassInfo* cursor = type;
-    while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
-      if (cursor->has_java_alias)
-        return true;
-      const std::string& simple = cursor->declaration->name;
-      if (simple == "窗口组件" || simple == "可视化组件" || simple == "组件容器" ||
-          simple == "可标记类") {
-        return true;
-      }
-      if (cursor->declaration->base_name.empty())
-        break;
-      cursor = symbols_.Resolve(BaseResolvableName(cursor->declaration->base_name), cursor);
-    }
-    return false;
-  };
   const auto member_has_annotation = [&](const std::string& name) {
     for (const Annotation& annotation : member.annotations) {
       if (annotation.name == name)
@@ -834,125 +789,30 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
     for (const Annotation& annotation : type.declaration->annotations) {
       if (annotation.name != name)
         continue;
-      std::string value = annotation.StringArgument("参数");
-      if (value.empty() && !annotation.arguments.empty())
-        value = annotation.arguments.front().value;
-      if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                                (value.front() == '\'' && value.back() == '\''))) {
-        value = value.substr(1, value.size() - 2);
-      }
-      return value;
+      return annotation.TextArgument(kArgumentParameter);
     }
     return std::string();
   };
-  const auto search_prefixes = [this]() {
-    std::vector<std::string> result;
-    const auto found = config_.options.find("search-res-prefix");
-    if (found == config_.options.end())
-      return result;
-    std::string list = found->second;
-    std::size_t begin = 0;
-    while (begin <= list.size()) {
-      const std::size_t end = list.find(';', begin);
-      const std::string prefix =
-          list.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
-      if (!prefix.empty())
-        result.push_back(prefix);
-      if (end == std::string::npos)
-        break;
-      begin = end + 1;
-    }
-    return result;
-  };
-  if (member_has_annotation("组件配置") || member_has_annotation("主题配置")) {
-    const ClassInfo* declared = symbols_.Resolve(BaseResolvableName(member.type_name), &klass);
-    if (member_has_annotation("组件配置")) {
-      bool component = false;
-      std::set<const ClassInfo*> visited;
-      const ClassInfo* cursor = declared;
-      while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
-        if (cursor->declaration->name == "窗口组件")
-          component = true;
-        if (cursor->declaration->base_name.empty())
-          break;
-        cursor = symbols_.Resolve(BaseResolvableName(cursor->declaration->base_name), cursor);
-      }
-      if (!component) {
-        error(member.position, "\"组件配置\" 只能应用在窗口组件类型的变量上");
-      }
-    }
-    if (member_has_annotation("主题配置")) {
-      if (declared == nullptr || declared->qualified_name != "结绳.安卓.主题资源") {
-        error(member.position, "\"主题配置\" 只能应用在 \"主题资源\" 类型的变量上");
-      }
-    }
-  }
-  if (member.kind == MemberKind::kVariable && member.expression_body == nullptr &&
-      !member_has_annotation("组件配置") && !member_has_annotation("布局配置") &&
-      !type_name_contains_array(member.type_name)) {
-    const ClassInfo* declared = symbols_.Resolve(BaseResolvableName(member.type_name), &klass);
-    if (declared != nullptr && declared->declaration != nullptr &&
-        declared->declaration->HasAnnotation("禁止创建对象") && !auto_creation_disabled(declared)) {
-      error(member.position,
-            "变量\"" + member.name +
-                "\"类型标注了禁止创建对象，编译器无法为其自动创建对象，请将其定义为参考变量");
-    }
-  }
+  const auto search_prefixes = [this]() { return config_.ListOption(option::kSearchResPrefix); };
   if ((member.kind == MemberKind::kVariable || member.kind == MemberKind::kConstant) &&
       member.expression_body != nullptr && member.expression_body->kind == ExprKind::kLiteral) {
     const ClassInfo* declared = symbols_.Resolve(BaseResolvableName(member.type_name), &klass);
     if (declared != nullptr && declared->declaration != nullptr) {
-      const std::string rule = class_annotation_text(*declared, "值输出规则");
-      if (rule == "@android/drawable" || rule == "@android/drawable-xxh" ||
-          rule == "@android/anim" || rule == "@android/xml") {
-        std::string value = member.expression_body->text;
-        if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                                  (value.front() == '\'' && value.back() == '\''))) {
-          value = value.substr(1, value.size() - 2);
-        }
+      const std::string rule = class_annotation_text(*declared, annotation::kValueOutputRule);
+      if (rule == annotation::kRuleDrawable || rule == annotation::kRuleDrawableXxh ||
+          rule == annotation::kRuleAnim || rule == annotation::kRuleXml) {
+        const std::string value = Unquote(member.expression_body->text);
         if (!value.empty() && value.front() != '@') {
-          const std::filesystem::path direct(value);
-          std::filesystem::path source_directory =
-              std::filesystem::path(member.expression_body != nullptr &&
-                                            klass.declaration != nullptr
-                                        ? klass.declaration->file
-                                        : std::string())
-                  .parent_path();
-          bool found_file = false;
-          if (direct.is_absolute()) {
-            std::error_code ec;
-            found_file = std::filesystem::exists(direct, ec);
-          } else {
-            std::vector<std::filesystem::path> bases;
-            bases.push_back(source_directory);
-            bases.push_back(std::filesystem::path("."));
-            std::filesystem::path cursor = source_directory;
-            for (int depth = 0; depth < 8; ++depth) {
-              if (cursor.empty() || !cursor.has_parent_path())
-                break;
-              const std::filesystem::path parent = cursor.parent_path();
-              if (parent == cursor)
-                break;
-              bases.push_back(parent);
-              cursor = parent;
-            }
-            for (const std::string& prefix : search_prefixes()) {
-              bases.push_back(std::filesystem::path(prefix));
-            }
-            for (const std::filesystem::path& base : bases) {
-              std::error_code ec;
-              if (std::filesystem::exists(base / direct, ec)) {
-                found_file = true;
-                break;
-              }
-            }
-          }
+          const std::string source_file =
+              klass.declaration != nullptr ? klass.declaration->file : std::string();
+          const bool found_file =
+              file_search::ResolveWithPrefixes(value, source_file, search_prefixes(), nullptr);
           const SourcePosition position = ExpressionStart(*member.expression_body);
           if (!found_file) {
             error(position,
                   "未找到文件(夹)\"" + value + "\"，请检查相应文件是否存在或是否具有访问权限");
           } else {
-            const std::string pattern = class_annotation_text(*declared, "匹配文件");
+            const std::string pattern = class_annotation_text(*declared, annotation::kMatchFile);
             if (!pattern.empty()) {
               try {
                 if (!std::regex_match(value, std::regex(pattern))) {
@@ -968,9 +828,9 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   }
 
   const bool property_read =
-      member.kind == MemberKind::kPropertyRead || member_has_annotation("属性读");
-  const bool property_write =
-      member.kind == MemberKind::kPropertyWrite || member_has_annotation("属性写");
+      member.kind == MemberKind::kPropertyRead || member_has_annotation(annotation::kPropertyRead);
+  const bool property_write = member.kind == MemberKind::kPropertyWrite ||
+                              member_has_annotation(annotation::kPropertyWrite);
   if (property_read) {
     if (!member.parameters.empty()) {
       error(member.position,
@@ -991,16 +851,25 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
             "属性写方法 \"" + member.name + "\" 不能具有返回类型，请删除该属性写方法的返回类型");
     }
   }
+  if (member.name == kOperatorIndex && member.parameters.size() != 1) {
+    error(member.position, "运算符重载方法必须具有且只能具有一个参数");
+  }
+  if (member.name == kOperatorIndexAssign && member.parameters.size() != 2) {
+    error(member.position, "当重载运算符 \"[]=\" 时，该方法必须具有且只能具有两个参数");
+  }
+  if (member.name == "=" && klass.declaration != nullptr) {
+    if (!HasStaticAnnotation(member) ||
+        BaseResolvableName(member.type_name) != klass.declaration->name) {
+      error(member.type_position, "重载\"=\"赋值符号方法返回类型必须为当前类\"" +
+                                      klass.declaration->name + "\"，且必须为静态方法");
+    }
+  }
   for (const Annotation& annotation : member.annotations) {
     if (annotation.name != "隐式操作")
       continue;
     if (annotation.arguments.empty())
       continue;
-    std::string value = annotation.arguments.front().value;
-    if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                              (value.front() == '\'' && value.back() == '\''))) {
-      value = value.substr(1, value.size() - 2);
-    }
+    const std::string value = Unquote(annotation.arguments.front().value);
     if (value != "cast") {
       error(annotation.arguments.front().position, "隐式操作的类型目前只能为\"cast\"");
     }
@@ -1014,20 +883,11 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   std::set<std::string> reported_static;
   std::set<std::string> reported_hidden;
   const auto class_derives_from = [this](const ClassInfo& klass, const ClassInfo* base) {
-    const ClassInfo* cursor = &klass;
-    std::set<const ClassInfo*> visited;
-    while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
-      if (cursor == base)
-        return true;
-      if (cursor->declaration->base_name.empty())
-        break;
-      cursor = symbols_.Resolve(cursor->declaration->base_name, cursor);
-    }
-    return false;
+    return DerivesFrom(symbols_, &klass, base);
   };
   const auto check_hidden = [&](const Member& member, const ClassInfo* owner,
                                 const SourcePosition& position, bool inherited_access_allowed) {
-    if (!HasAnnotationName(member.annotations, "隐藏"))
+    if (!HasAnnotationName(member.annotations, annotation::kHidden))
       return;
     if (owner == nullptr || owner == &klass)
       return;
@@ -1096,7 +956,6 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
                         std::to_string(provided) + "个参数");
   };
 
-  // Walk an expression for static-member access through an instance.
   std::function<void(const Expr*)> check_static = [&](const Expr* expression) {
     if (expression == nullptr)
       return;
@@ -1295,6 +1154,19 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       }
       return;
     }
+    if (expression->kind == ExprKind::kArrayAccess) {
+      if (expression->children.size() < 2 || expression->children[0] == nullptr)
+        return;
+      const std::string target_type = InferTypeName(klass, *expression->children[0]);
+      if (target_type.empty() || target_type.find('[') != std::string::npos)
+        return;
+      const ClassInfo* target_class = symbols_.Resolve(BaseResolvableName(target_type), &klass);
+      if (target_class != nullptr && has_operator_overload(*target_class, kOperatorIndex))
+        return;
+      invalid_expressions.insert(expression);
+      error(ExpressionStart(*expression), "访问的对象不是数组或重载了\"[]\"运算符的对象");
+      return;
+    }
     if (expression->kind != ExprKind::kCall || expression->children.empty() ||
         expression->children[0] == nullptr) {
       return;
@@ -1331,7 +1203,6 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   std::function<void(const std::vector<StmtPtr>&, bool)> walk_block;
   std::function<void(const Stmt&, bool)> walk_statement;
 
-  // scope stack for duplicate/shadow diagnostics
   std::vector<std::set<std::string>> scopes;
 
   const auto java_extends = [this](const ClassInfo* info) {
@@ -1477,7 +1348,7 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
         std::string type_text = expression->text;
         while (!type_text.empty() && type_text.back() == '?')
           type_text.pop_back();
-        while (type_text.size() >= 2 && type_text.compare(type_text.size() - 2, 2, "[]") == 0) {
+        while (EndsWith(type_text, kOperatorIndex)) {
           type_text = type_text.substr(0, type_text.size() - 2);
         }
         if (type_text.find('<') == std::string::npos && !type_text.empty() &&
@@ -1511,18 +1382,6 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       case StmtKind::kVariable: {
         if (!statement.type_name.empty()) {
           check_type(statement.type_name, statement.type_position);
-        }
-        if (statement.expr == nullptr && !statement.type_name.empty() &&
-            !type_name_contains_array(statement.type_name)) {
-          const ClassInfo* declared =
-              symbols_.Resolve(BaseResolvableName(statement.type_name), &klass);
-          if (declared != nullptr && declared->declaration != nullptr &&
-              declared->declaration->HasAnnotation("禁止创建对象") &&
-              !auto_creation_disabled(declared)) {
-            error(statement.position,
-                  "变量\"" + statement.name +
-                      "\"类型标注了禁止创建对象，编译器无法为其自动创建对象，请将其定义为参考变量");
-          }
         }
         const bool duplicate = scopes.back().count(statement.name) != 0;
         if (duplicate) {
@@ -1591,6 +1450,34 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
         check_symbols(expression, false);
         check_static(expression);
         walk_type_expression(expression);
+        if (expression != nullptr && expression->kind == ExprKind::kExchange &&
+            expression->children.size() == 2 && expression->children[0] != nullptr &&
+            expression->children[1] != nullptr) {
+          const bool left_index = expression->children[0]->kind == ExprKind::kArrayAccess;
+          const bool right_index = expression->children[1]->kind == ExprKind::kArrayAccess;
+          if (left_index != right_index) {
+            error(ExpressionStart(*expression->children[0]), "交换式左右值格式不同");
+          } else {
+            for (const ExprPtr& operand : expression->children) {
+              if (operand == nullptr || operand->kind != ExprKind::kArrayAccess ||
+                  operand->children.empty() || operand->children[0] == nullptr) {
+                continue;
+              }
+              const std::string receiver_type = InferTypeName(klass, *operand->children[0]);
+              if (receiver_type.empty() || receiver_type.find('[') != std::string::npos)
+                continue;
+              const ClassInfo* receiver =
+                  symbols_.Resolve(BaseResolvableName(receiver_type), &klass);
+              const ClassInfo* owner = nullptr;
+              if (receiver != nullptr &&
+                  FindMemberInChain(symbols_, *receiver, kOperatorIndexAssign, &owner) == nullptr) {
+                error(ExpressionStart(*operand),
+                      "访问的对象未重载\"[]=\"运算符，不可赋值或进行交换");
+                break;
+              }
+            }
+          }
+        }
         if (expression != nullptr && expression->kind == ExprKind::kAssign &&
             expression->children.size() == 2 && expression->children[0] != nullptr &&
             expression->children[1] != nullptr) {
@@ -1598,9 +1485,45 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
           LintAutoCast(klass, expression->children[1]->position, target_type,
                        expression->children[1].get());
           const std::string source_type = InferTypeName(klass, *expression->children[1]);
-          if (!target_type.empty() &&
-              (invalid_expressions.count(expression->children[1].get()) != 0 ||
-               primitive_mismatch(target_type, source_type))) {
+          const bool lvalue_invalid = expression->children[0]->kind == ExprKind::kArrayAccess &&
+                                      invalid_expressions.count(expression->children[0].get()) != 0;
+          if (lvalue_invalid) {
+            error(ExpressionStart(*expression->children[1]), "右值类型不匹配左值类型");
+          } else if (expression->children[0]->kind == ExprKind::kArrayAccess) {
+            const Expr& access = *expression->children[0];
+            const std::string receiver_type = InferTypeName(klass, *access.children[0]);
+            const bool receiver_is_array =
+                !receiver_type.empty() && receiver_type.find('[') != std::string::npos;
+            const ClassInfo* receiver =
+                !receiver_is_array && !receiver_type.empty()
+                    ? symbols_.Resolve(BaseResolvableName(receiver_type), &klass)
+                    : nullptr;
+            const ClassInfo* owner = nullptr;
+            const Member* writer =
+                receiver != nullptr
+                    ? FindMemberInChain(symbols_, *receiver, kOperatorIndexAssign, &owner)
+                    : nullptr;
+            if (receiver_is_array) {
+              if (!target_type.empty() &&
+                  (invalid_expressions.count(expression->children[1].get()) != 0 ||
+                   primitive_mismatch(target_type, source_type))) {
+                error(ExpressionStart(*expression->children[1]), "右值类型不匹配左值类型");
+              }
+            } else if (receiver != nullptr && writer == nullptr) {
+              error(ExpressionStart(access), "访问的对象未重载\"[]=\"运算符，不可赋值或进行交换");
+              error(ExpressionStart(*expression->children[1]),
+                    "右值类型不匹配运算符重载方法\"[]=\"的第2个参数类型");
+            } else if (writer != nullptr && writer->parameters.size() >= 2 &&
+                       !writer->parameters[1].type_name.empty()) {
+              if (invalid_expressions.count(expression->children[1].get()) != 0 ||
+                  primitive_mismatch(writer->parameters[1].type_name, source_type)) {
+                error(ExpressionStart(*expression->children[1]),
+                      "右值类型不匹配运算符重载方法\"[]=\"的第2个参数类型");
+              }
+            }
+          } else if (!target_type.empty() &&
+                     (invalid_expressions.count(expression->children[1].get()) != 0 ||
+                      primitive_mismatch(target_type, source_type))) {
             error(ExpressionStart(*expression->children[1]), "右值类型不匹配左值类型");
           }
         }
@@ -1723,4 +1646,20 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   lint_return_type_.clear();
 }
 
-}  // namespace tiecodec
+void JavaEmitter::RemoveUnusedLocalsAfterLint() {
+  if (diagnostics_.has_errors())
+    return;
+  std::set<const ClassDecl*> visited;
+  for (const std::string& class_name : symbols_.class_names()) {
+    const auto found = symbols_.classes().find(class_name);
+    if (found == symbols_.classes().end() || found->second.declaration == nullptr)
+      continue;
+    const ClassDecl* declaration = found->second.declaration;
+    if (!visited.insert(declaration).second)
+      continue;
+    tiecodec::RemoveUnusedLocals(const_cast<ClassDecl*>(declaration), declaration->file,
+                                 &diagnostics_);
+  }
+}
+
+}

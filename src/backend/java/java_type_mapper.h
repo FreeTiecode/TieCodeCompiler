@@ -22,6 +22,6 @@ private:
   const NamingScheme* names_ = nullptr;
 };
 
-}  // namespace tiecodec
+}
 
 #endif

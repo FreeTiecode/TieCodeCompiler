@@ -11,12 +11,10 @@ struct RetraceRequest {
   std::string line;
 };
 
-/// Single file/line retrace; prints "<source>:<line>" or ":0".
 int RunRetrace(const RetraceRequest& request);
 
-/// Batch retrace from a JSON file; prints the reference JSON format.
 int RunRetraceBatch(const std::string& batch_path);
 
-}  // namespace tiecodec
+}
 
-#endif  // TIECODEC_CLI_RETRACE_H
+#endif

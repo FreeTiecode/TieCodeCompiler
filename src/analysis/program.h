@@ -19,6 +19,6 @@ struct Program {
 const ClassInfo* FindEntryClass(const SymbolTable& symbols,
                                 const std::string& name = kEntryClassName);
 
-}  // namespace tiecodec
+}
 
 #endif

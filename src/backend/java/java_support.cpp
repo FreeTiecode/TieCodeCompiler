@@ -1,3 +1,4 @@
+#include "constants.h"
 #include "java_emitter.h"
 
 #include <algorithm>
@@ -36,16 +37,13 @@ std::string BaseTypeName(const std::string& type_name) {
   return result;
 }
 
-}  // namespace
+}
 
 std::string JavaEmitter::MemberCodeAnnotation(const Member& member, const std::string& name) const {
   for (const Annotation& annotation : member.annotations) {
     if (annotation.name != name)
       continue;
-    std::string value = annotation.StringArgument("参数");
-    if (value.empty() && !annotation.arguments.empty())
-      value = annotation.arguments.front().value;
-    return value;
+    return annotation.TextArgument(kArgumentParameter);
   }
   return {};
 }
@@ -64,15 +62,15 @@ std::string JavaEmitter::StaticTypeNameOf(const ClassInfo& klass, const Expr& ex
     }
     case ExprKind::kLiteral: {
       if (expression.text == "真" || expression.text == "假")
-        return "逻辑型";
+        return builtin_type::kBoolean;
       if (!expression.raw.empty() && (expression.raw[0] == '"' || expression.raw[0] == '[')) {
-        return "文本";
+        return builtin_type::kText;
       }
       if (!expression.raw.empty() && expression.raw[0] == '\'')
-        return "字符";
+        return builtin_type::kCharacter;
       if (expression.text.find('.') != std::string::npos)
-        return "小数";
-      return "整数";
+        return builtin_type::kDecimal;
+      return builtin_type::kInteger;
     }
     case ExprKind::kFieldAccess: {
       if (expression.children.empty() || expression.children[0] == nullptr)
@@ -125,7 +123,16 @@ std::string JavaEmitter::LValueJavaType(const ClassInfo& klass, const Expr& targ
         return "Object";
       const std::string type = StaticTypeNameOf(klass, *target.children[0]);
       const TypeShape shape = ParseTypeShape(type);
-      return types_.MapType(shape.base, &klass);
+      if (shape.base.empty() || type.find('[') != std::string::npos)
+        return types_.MapType(shape.base, &klass);
+      const ClassInfo* receiver = symbols_.Resolve(BaseResolvableName(shape.base), &klass);
+      if (receiver != nullptr) {
+        const ClassInfo* owner = nullptr;
+        if (const Member* indexer = FindMemberInChain(symbols_, *receiver, "[]", &owner)) {
+          return indexer->type_name.empty() ? "Object" : types_.MapType(indexer->type_name, &klass);
+        }
+      }
+      return "Object";
     }
     default:
       return "Object";
@@ -140,9 +147,47 @@ void JavaEmitter::EmitSwap(const ClassInfo& klass, const Expr& exchange, int ind
   }
   const Expr& left = *exchange.children[0];
   const Expr& right = *exchange.children[1];
-  const std::string type = LValueJavaType(klass, left);
-  const std::string prefix = config_.friendly_name == "original" ? "rn_" : "rN_";
+  const std::string prefix =
+      IsOriginalNaming(config_.friendly_name) ? kRandomNamePrefix : kRenamedTempPrefix;
   const std::string temp = names_.GeneratedName(prefix, ++generated_name_counter_);
+  const auto object_index_writer = [&](const Expr& operand) -> const Member* {
+    if (operand.kind != ExprKind::kArrayAccess || operand.children.size() < 2 ||
+        operand.children[0] == nullptr) {
+      return nullptr;
+    }
+    const std::string type = StaticTypeNameOf(klass, *operand.children[0]);
+    if (type.empty() || type.find('[') != std::string::npos)
+      return nullptr;
+    const ClassInfo* receiver = symbols_.Resolve(BaseResolvableName(type), &klass);
+    if (receiver == nullptr)
+      return nullptr;
+    const ClassInfo* owner = nullptr;
+    return FindMemberInChain(symbols_, *receiver, kOperatorIndexAssign, &owner);
+  };
+  const Member* right_writer = object_index_writer(right);
+  if (right_writer != nullptr) {
+    const auto raw_index_text = [&](const Expr& operand) -> std::string {
+      if (operand.kind == ExprKind::kArrayAccess && operand.children.size() >= 2 &&
+          operand.children[0] != nullptr && operand.children[1] != nullptr) {
+        return EmitExpression(klass, *operand.children[0]) + "[" +
+               EmitExpression(klass, *operand.children[1]) + "]";
+      }
+      return EmitExpression(klass, operand);
+    };
+    const std::string receiver_text = EmitExpression(klass, *right.children[0]);
+    const std::string index_text = EmitExpression(klass, *right.children[1]);
+    const std::string writer_name = names_.MemberName(*right_writer);
+    Indent(indent, out);
+    out->append(LValueJavaType(klass, right) + " " + temp + " = " + EmitExpression(klass, right) +
+                ";\n");
+    Indent(indent, out);
+    out->append(receiver_text + "." + writer_name + "(" + index_text + ", " + raw_index_text(left) +
+                ");\n");
+    Indent(indent, out);
+    out->append(receiver_text + "." + writer_name + "(" + index_text + ", " + temp + ");\n");
+    return;
+  }
+  const std::string type = LValueJavaType(klass, left);
   Indent(indent, out);
   out->append(type + " " + temp + " = " + EmitExpression(klass, right) + ";\n");
   Indent(indent, out);
@@ -164,7 +209,6 @@ bool JavaEmitter::HasAssignmentOperator(const ClassInfo& klass,
                   [](const Annotation& annotation) { return annotation.name == "运算符重载"; })) {
     return true;
   }
-  // Operator symbols used as method names carry the operator semantics.
   const std::string& name = member->name;
   return name == "=" || name == "+" || name == "-" || name == "*" || name == "/" || name == "%" ||
          name == "==" || name == "!=" || name == "<" || name == "<=" || name == ">" ||
@@ -186,10 +230,7 @@ const Member* JavaEmitter::FindImplicitCast(const ClassInfo& klass, const std::s
       for (const Annotation& annotation : member.annotations) {
         if (annotation.name != "隐式操作")
           continue;
-        operation = annotation.StringArgument("参数");
-        if (operation.empty() && !annotation.arguments.empty()) {
-          operation = annotation.arguments.front().value;
-        }
+        operation = annotation.TextArgument(kArgumentParameter);
       }
       if (operation != "cast")
         continue;
@@ -237,7 +278,7 @@ std::string JavaEmitter::InitializerExpression(const ClassInfo& klass,
     return EmitArrayLiteral(klass, value, types_.MapType(shape.base, &klass), shape.dimensions);
   }
   const bool direct_construction =
-      value.kind == ExprKind::kNew && BaseTypeName(value.text) == BaseTypeName(declared_type) ||
+      (value.kind == ExprKind::kNew && BaseTypeName(value.text) == BaseTypeName(declared_type)) ||
       value.kind == ExprKind::kMulti;
   if (!direct_construction) {
     if (const Member* cast = FindImplicitCast(klass, declared_type, value)) {
@@ -386,4 +427,4 @@ bool JavaEmitter::FoldStringConcat(const Expr& expression, std::string* value) c
   }
 }
 
-}  // namespace tiecodec
+}

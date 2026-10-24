@@ -2,6 +2,8 @@
 
 #include <cctype>
 
+#include "constants.h"
+
 namespace tiecodec {
 namespace {
 
@@ -21,7 +23,7 @@ bool IsIdentifierAscii(char c) {
   return IsAsciiAlpha(c) || IsAsciiDigit(c) || c == '_' || c == '$';
 }
 
-}  // namespace
+}
 
 const char* TokenKindName(TokenKind kind) {
   switch (kind) {
@@ -101,8 +103,7 @@ void Lexer::Advance() {
     at_line_start_ = true;
   } else if (!IsContinuationByte(c)) {
     if (c == '\t') {
-      // Reference diagnostics use tab stops of width four for source columns.
-      column_ += 4 - (column_ % 4);
+      column_ += kTabWidth - (column_ % kTabWidth);
     } else {
       ++column_;
     }
@@ -171,7 +172,7 @@ int Lexer::IndentLevelAt(std::size_t line_start, std::size_t offset) const {
       break;
     }
   }
-  return tabs + spaces / 4;
+  return tabs + spaces / kTabWidth;
 }
 
 Token Lexer::MakeToken(TokenKind kind, std::size_t begin_offset, std::size_t begin_line,
@@ -541,4 +542,4 @@ void Lexer::SkipRestOfLine() {
     Advance();
 }
 
-}  // namespace tiecodec
+}

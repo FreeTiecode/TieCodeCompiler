@@ -51,4 +51,4 @@ bool FileSystemSourceProvider::ReadFile(const std::string& path, SourceFile* fil
   return true;
 }
 
-}  // namespace tiecodec
+}

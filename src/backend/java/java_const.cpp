@@ -5,6 +5,8 @@
 #include <limits>
 #include <string>
 
+#include "constants.h"
+
 namespace tiecodec {
 namespace {
 
@@ -57,7 +59,7 @@ bool AsNumeric(const ConstantValue& value, double* real, long long* integer, boo
   return true;
 }
 
-}  // namespace
+}
 
 bool FoldConstant(const Expr& expression, ConstantValue* value) {
   switch (expression.kind) {
@@ -255,11 +257,12 @@ std::string FormatConstant(const ConstantValue& value) {
   if (value.kind == ConstantValue::Kind::kInteger)
     return std::to_string(value.integer);
   if (std::isfinite(value.real) && std::floor(value.real) == value.real &&
-      std::fabs(value.real) < 1e15) {
+      std::fabs(value.real) < kMaxExactIntegralDouble) {
     return std::to_string(static_cast<long long>(value.real));
   }
   char buffer[64];
-  std::snprintf(buffer, sizeof(buffer), "%.17g", value.real);
+  std::snprintf(buffer, sizeof(buffer), "%.*g", std::numeric_limits<double>::max_digits10,
+                value.real);
   std::string text(buffer);
   if (text.find('.') == std::string::npos && text.find('e') == std::string::npos) {
     text += ".0";
@@ -267,4 +270,4 @@ std::string FormatConstant(const ConstantValue& value) {
   return text + "D";
 }
 
-}  // namespace tiecodec
+}

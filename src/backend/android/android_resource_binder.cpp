@@ -8,51 +8,14 @@
 #include <string>
 #include <vector>
 
+#include "constants.h"
 #include "java_type_mapper.h"
 #include "output_sink.h"
 #include "pinyin_table.h"
+#include "text_util.h"
 
 namespace tiecodec {
 namespace {
-
-std::string TrimQuotes(std::string text) {
-  if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-    return text.substr(1, text.size() - 2);
-  }
-  return text;
-}
-
-std::string Unescape(std::string text) {
-  std::string result;
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    if (text[i] != '\\' || i + 1 >= text.size()) {
-      result.push_back(text[i]);
-      continue;
-    }
-    const char next = text[++i];
-    switch (next) {
-      case 'n':
-        result.push_back('\n');
-        break;
-      case 't':
-        result.push_back('\t');
-        break;
-      case 'r':
-        result.push_back('\r');
-        break;
-      case '"':
-        result.push_back('"');
-        break;
-      case '\\':
-        result.push_back('\\');
-        break;
-      default:
-        result.push_back(next);
-        break;
-    }
-  }
-  return result;
-}
 
 std::string XmlEscape(const std::string& text) {
   std::string result;
@@ -78,29 +41,6 @@ std::string XmlEscape(const std::string& text) {
   return result;
 }
 
-const char* AnnotationValue(const std::vector<Annotation>& annotations, const std::string& name,
-                            std::string* value) {
-  for (const Annotation& annotation : annotations) {
-    if (annotation.name != name)
-      continue;
-    std::string text = annotation.StringArgument("参数");
-    if (text.empty() && !annotation.arguments.empty()) {
-      text = annotation.arguments.front().value;
-    }
-    *value = Unescape(TrimQuotes(text));
-    return value->c_str();
-  }
-  return nullptr;
-}
-
-const char* ArgumentOf(const Annotation& annotation, const std::string& name) {
-  for (const AnnotationArgument& argument : annotation.arguments) {
-    if (argument.name == name)
-      return argument.value.c_str();
-  }
-  return nullptr;
-}
-
 std::string StyleAlias(const std::string& name) {
   static const std::map<std::string, std::string> aliases = {
       {"主题色", "colorPrimary"},           {"强调色", "colorPrimaryDark"},
@@ -112,14 +52,6 @@ std::string StyleAlias(const std::string& name) {
   };
   const auto it = aliases.find(name);
   return it == aliases.end() ? name : it->second;
-}
-
-bool HasAnnotation(const std::vector<Annotation>& annotations, const std::string& name) {
-  for (const Annotation& annotation : annotations) {
-    if (annotation.name == name)
-      return true;
-  }
-  return false;
 }
 
 std::string JoinPath(const std::string& base, const std::string& relative) {
@@ -135,7 +67,7 @@ std::string ExtensionOf(const std::string& path) {
   return std::filesystem::path(path).extension().string();
 }
 
-}  // namespace
+}
 
 AndroidResourceBinder::AndroidResourceBinder(const SymbolTable& symbols,
                                              const BackendConfig& config)
@@ -145,24 +77,18 @@ std::string AndroidResourceBinder::RuleOf(const ClassInfo& klass) const {
   if (klass.declaration == nullptr)
     return {};
   for (const Annotation& annotation : klass.declaration->annotations) {
-    if (annotation.name != "值输出规则")
+    if (annotation.name != annotation::kValueOutputRule)
       continue;
-    std::string value = annotation.StringArgument("参数");
-    if (value.empty() && !annotation.arguments.empty()) {
-      value = annotation.arguments.front().value;
-    }
-    return Unescape(TrimQuotes(value));
+    return annotation.TextArgument(kArgumentParameter);
   }
   return {};
 }
 
 std::string AndroidResourceBinder::ConstantTypeOf(const ClassInfo& klass) const {
   for (const Annotation& annotation : klass.declaration->annotations) {
-    if (annotation.name != "常量类型")
+    if (annotation.name != annotation::kConstantType)
       continue;
-    std::string value =
-        annotation.arguments.empty() ? std::string() : annotation.arguments.front().value;
-    value = TrimQuotes(value);
+    const std::string value = annotation.TextArgument(kArgumentParameter);
     if (!value.empty())
       return value;
   }
@@ -183,13 +109,9 @@ std::string AndroidResourceBinder::LiteralValue(const Member& member) const {
 
 std::string AndroidResourceBinder::OutputNameOf(const Member& member) const {
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != "输出名")
+    if (annotation.name != annotation::kOutputName)
       continue;
-    std::string value = annotation.StringArgument("参数");
-    if (value.empty() && !annotation.arguments.empty()) {
-      value = annotation.arguments.front().value;
-    }
-    return TrimQuotes(value);
+    return annotation.TextArgument(kArgumentParameter);
   }
   return names_.MemberName(member);
 }
@@ -217,8 +139,7 @@ std::string AndroidResourceBinder::FieldType(const ClassInfo& owner, const Membe
 
 std::string AndroidResourceBinder::ResourceImport(const ClassInfo& owner) const {
   (void)owner;
-  const auto it = config_.options.find("r-namespace");
-  const std::string package = it == config_.options.end() ? config_.namespace_name : it->second;
+  const std::string package = config_.Option(option::kRNamespace, config_.namespace_name);
   return package + ".R";
 }
 
@@ -238,23 +159,10 @@ std::string AndroidResourceBinder::ResolvePath(const ClassInfo& owner,
     return candidate;
   if (std::filesystem::exists(path))
     return path;
-  const auto prefixes = config_.options.find("search-res-prefix");
-  if (prefixes != config_.options.end()) {
-    std::string list = prefixes->second;
-    std::size_t begin = 0;
-    while (begin <= list.size()) {
-      const std::size_t end = list.find(';', begin);
-      const std::string prefix =
-          list.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
-      if (!prefix.empty()) {
-        candidate = JoinPath(prefix, path);
-        if (std::filesystem::exists(candidate))
-          return candidate;
-      }
-      if (end == std::string::npos)
-        break;
-      begin = end + 1;
-    }
+  for (const std::string& prefix : config_.ListOption(option::kSearchResPrefix)) {
+    candidate = JoinPath(prefix, path);
+    if (std::filesystem::exists(candidate))
+      return candidate;
   }
   return candidate;
 }
@@ -291,19 +199,19 @@ bool AndroidResourceBinder::RegisterFileResource(const ClassInfo& owner, const M
   std::string group;
   std::string target_dir;
   std::string r_kind;
-  if (rule == "@android/drawable") {
+  if (rule == annotation::kRuleDrawable) {
     group = "drawable";
     target_dir = "res/drawable";
     r_kind = "drawable";
-  } else if (rule == "@android/drawable-xxh") {
+  } else if (rule == annotation::kRuleDrawableXxh) {
     group = "drawable";
     target_dir = "res/drawable-xxhdpi";
     r_kind = "drawable";
-  } else if (rule == "@android/anim") {
+  } else if (rule == annotation::kRuleAnim) {
     group = "anim";
     target_dir = "res/anim";
     r_kind = "anim";
-  } else if (rule == "@android/xml") {
+  } else if (rule == annotation::kRuleXml) {
     group = "xml";
     target_dir = "res/xml";
     r_kind = "xml";
@@ -336,21 +244,19 @@ bool AndroidResourceBinder::RegisterStringResource(const Member& member, const s
   entry.sort_key = name;
   strings_[""].push_back(std::move(entry));
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != "国际化")
+    if (annotation.name != annotation::kI18n)
       continue;
     std::string locale;
-    std::string text = annotation.StringArgument("参数");
-    if (text.empty() && !annotation.arguments.empty())
-      text = annotation.arguments.front().value;
+    std::string text = annotation.TextArgument(kArgumentParameter);
     for (const AnnotationArgument& argument : annotation.arguments) {
-      if (argument.name == "地区")
-        locale = Unescape(TrimQuotes(argument.value));
+      if (argument.name == annotation::kI18nLocale)
+        locale = annotation.UnwrappedArgument(argument);
       else if (argument.name.empty())
-        text = argument.value;
+        text = annotation.UnwrappedArgument(argument);
     }
     StringEntry localized;
     localized.name = OutputNameOf(member);
-    localized.value = Unescape(TrimQuotes(text));
+    localized.value = text;
     localized.sort_key = ResourceNameOf(localized.name);
     strings_[locale].push_back(std::move(localized));
   }
@@ -363,7 +269,7 @@ bool AndroidResourceBinder::RegisterThemeResource(const ClassInfo& owner, const 
   resources_empty_ = false;
   const Annotation* config = nullptr;
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name == "主题配置")
+    if (annotation.name == annotation::kThemeConfig)
       config = &annotation;
   }
   if (config == nullptr) {
@@ -375,13 +281,13 @@ bool AndroidResourceBinder::RegisterThemeResource(const ClassInfo& owner, const 
   StyleEntry style;
   style.name = value;
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != "主题配置")
+    if (annotation.name != annotation::kThemeConfig)
       continue;
     std::string parent;
     std::string table;
     for (const AnnotationArgument& argument : annotation.arguments) {
       if (argument.name == "类型")
-        parent = Unescape(TrimQuotes(argument.value));
+        parent = annotation.UnwrappedArgument(argument);
       else if (argument.name.empty())
         table = argument.value;
     }
@@ -492,22 +398,15 @@ void AndroidResourceBinder::ProcessClassAnnotations(const ClassInfo& klass) {
   if (klass.declaration == nullptr)
     return;
   for (const Annotation& annotation : klass.declaration->annotations) {
-    if (annotation.name == "全局主题") {
-      std::string value = annotation.StringArgument("参数");
-      if (value.empty() && !annotation.arguments.empty()) {
-        value = annotation.arguments.front().value;
-      }
-      global_theme_ = Unescape(TrimQuotes(value));
+    if (annotation.name == annotation::kGlobalTheme) {
+      global_theme_ = annotation.TextArgument(kArgumentParameter);
       continue;
     }
-    std::string path = annotation.StringArgument("参数");
-    if (path.empty() && !annotation.arguments.empty())
-      path = annotation.arguments.front().value;
-    path = Unescape(TrimQuotes(path));
+    const std::string path = annotation.TextArgument(kArgumentParameter);
     if (path.empty())
       continue;
     const std::string resolved = ResolvePath(klass, path);
-    if (annotation.name == "附加资源") {
+    if (annotation.name == annotation::kExtraResource) {
       CopyDirectory(resolved, "assets/");
     } else if (annotation.name == "安卓资源.图片") {
       CopyFileTo(resolved, "res/drawable/" + BaseName(resolved));
@@ -517,9 +416,9 @@ void AndroidResourceBinder::ProcessClassAnnotations(const ClassInfo& klass) {
       CopyFileTo(resolved, "res/layout/" + BaseName(resolved));
     } else if (annotation.name == "安卓资源.XML") {
       CopyFileTo(resolved, "res/xml/" + BaseName(resolved));
-    } else if (annotation.name == "安卓资源") {
+    } else if (annotation.name == annotation::kAndroidResource) {
       CopyResourceDirectory(resolved);
-    } else if (annotation.name == "外部Java文件") {
+    } else if (annotation.name == annotation::kExternalJavaFile) {
       CopyDirectory(resolved, source_prefix_);
     } else if (annotation.name == "外部动态库") {
       CopyDirectory(resolved, "jniLibs/");
@@ -530,15 +429,15 @@ void AndroidResourceBinder::ProcessClassAnnotations(const ClassInfo& klass) {
 void AndroidResourceBinder::ProcessMemberManifest(const ClassInfo& klass, const Member& member) {
   (void)klass;
   for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != "附加清单")
+    if (annotation.name != annotation::kExtraManifest)
       continue;
     std::string node = "application";
     std::string content;
     for (const AnnotationArgument& argument : annotation.arguments) {
-      if (argument.name == "节点")
-        node = Unescape(TrimQuotes(argument.value));
+      if (argument.name == annotation::kManifestNode)
+        node = annotation.UnwrappedArgument(argument);
       else if (argument.name.empty())
-        content = Unescape(TrimQuotes(argument.value));
+        content = annotation.UnwrappedArgument(argument);
     }
     if (content.empty())
       continue;
@@ -595,7 +494,7 @@ std::vector<std::pair<std::string, std::string>> AndroidResourceBinder::ParseTab
     while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
       value.erase(value.begin());
     }
-    items.emplace_back(key, Unescape(TrimQuotes(value)));
+    items.emplace_back(key, Unescape(UnwrapQuotes(value)));
   }
   return items;
 }
@@ -656,4 +555,4 @@ void AndroidResourceBinder::Write(OutputSink& sink) const {
     sink.CopyFile(copy.source, copy.target);
 }
 
-}  // namespace tiecodec
+}

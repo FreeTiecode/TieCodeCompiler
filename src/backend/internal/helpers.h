@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ast.h"
+#include "constants.h"
 #include "text_util.h"
 
 namespace tiecodec {
@@ -130,10 +131,10 @@ inline int CodeLineIndentLevel(const std::string& line) {
       break;
     }
   }
-  return tabs + spaces / 4;
+  return tabs + spaces / kTabWidth;
 }
 
-inline std::vector<std::string> NormalizeCodeBlock(const std::string& code, int base_indent,
+inline std::vector<std::string> NormalizeCodeBlock(const std::string& code, int base_indent_level,
                                                    int code_indent) {
   std::vector<std::string> lines;
   for (const std::string& raw : SplitLines(code)) {
@@ -150,7 +151,7 @@ inline std::vector<std::string> NormalizeCodeBlock(const std::string& code, int 
     }
     const int relative = CodeLineIndentLevel(raw) - code_indent;
     const int level = relative > 0 ? relative : 0;
-    lines.push_back(std::string(static_cast<size_t>(base_indent + level * 2), ' ') + content);
+    lines.push_back(IndentText(base_indent_level + level) + content);
   }
   return lines;
 }
@@ -213,7 +214,7 @@ inline bool IsIdentifierByte(char c) {
          u >= 0x80;
 }
 
-}  // namespace detail
-}  // namespace tiecodec
+}
+}
 
 #endif

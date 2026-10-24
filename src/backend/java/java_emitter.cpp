@@ -1,5 +1,6 @@
 #include "java_emitter.h"
 
+#include "constants.h"
 #include "java_const.h"
 
 #include <algorithm>
@@ -27,8 +28,8 @@ JavaEmitter::JavaEmitter(const SymbolTable& symbols, const BackendConfig& config
       types_(types),
       diagnostics_(diagnostics),
       resources_(resources) {
-  if (config.friendly_name == "pinyin")
-    generated_name_counter_ = 2;
+  if (IsPinyinNaming(config.friendly_name))
+    generated_name_counter_ = kPinyinGeneratedNameStart;
 }
 
 void JavaEmitter::SetPlan(
@@ -70,10 +71,7 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       if (klass.has_java_alias)
         shell_base.clear();
     }
-    const auto r_namespace = config_.options.find("r-namespace");
-    shell_imports.insert(
-        (r_namespace == config_.options.end() ? config_.namespace_name : r_namespace->second) +
-        ".R");
+    shell_imports.insert(config_.Option(option::kRNamespace, config_.namespace_name) + ".R");
     EmittedText shell;
     shell.Mark(current_file_, class_line);
     shell += "package " + names_.Package(klass) + ";\n\n";
@@ -97,6 +95,7 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
   std::set<std::string> imports;
   CollectImports(klass, &imports);
   EmittedText body;
+  pending_async_machines_.clear();
   body.Mark(current_file_, class_line);
   if (klass.declaration != nullptr) {
     bool previous_was_code_block = false;
@@ -134,6 +133,9 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       }
     }
   }
+  for (const std::string& machine : pending_async_machines_)
+    body += machine;
+  pending_async_machines_.clear();
   std::vector<const Member*> trailing_code_blocks;
   if (klass.declaration != nullptr) {
     for (const Member& member : klass.declaration->members) {
@@ -161,7 +163,7 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
     std::string dispatch_create_name;
     if (klass.declaration != nullptr) {
       for (const Member& member : klass.declaration->members) {
-        if (member.kind == MemberKind::kEventBlock && member.name == "创建完毕") {
+        if (member.kind == MemberKind::kEventBlock && member.name == kCreateCompletedMember) {
           dispatch_create_done = true;
           dispatch_create_name = names_.MemberName(member);
         }
@@ -171,18 +173,19 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       for (const auto& entry : *virtual_overrides_) {
         if (entry.first != &klass || entry.second == nullptr)
           continue;
-        if (entry.second->name == "创建完毕") {
+        if (entry.second->name == kCreateCompletedMember) {
           dispatch_create_done = true;
           dispatch_create_name = names_.MemberName(*entry.second);
         }
       }
     }
-    body.Mark(current_file_, class_line);
-    body += "\n  public " + names_.ClassName(klass) + "(android.content.Context context) {\n";
-    body += "    super(context);\n";
-    if (dispatch_create_done)
+    if (dispatch_create_done) {
+      body.Mark(current_file_, class_line);
+      body += "\n  public " + names_.ClassName(klass) + "(android.content.Context context) {\n";
+      body += "    super(context);\n";
       body += "    " + dispatch_create_name + "();\n";
-    body += "  }\n";
+      body += "  }\n";
+    }
   }
 
   {
@@ -222,10 +225,8 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
   std::string class_suffix;
   if (klass.declaration != nullptr) {
     for (const Annotation& annotation : klass.declaration->annotations) {
-      std::string value = annotation.StringArgument("参数");
-      if (value.empty() && !annotation.arguments.empty())
-        value = annotation.arguments.front().value;
-      if (annotation.name == "前缀代码")
+      const std::string value = annotation.TextArgument(kArgumentParameter);
+      if (annotation.name == annotation::kPrefixCode)
         class_prefix = value;
       if (annotation.name == "后缀代码")
         class_suffix = value;
@@ -261,9 +262,9 @@ std::vector<JavaEmitter::ComponentField> JavaEmitter::CollectComponentFields(
     const Annotation* config = nullptr;
     bool tly_config = false;
     for (const Annotation& annotation : member.annotations) {
-      if (annotation.name == "组件配置")
+      if (annotation.name == annotation::kComponentConfig)
         config = &annotation;
-      if (annotation.name == "布局配置") {
+      if (annotation.name == annotation::kLayoutConfig) {
         config = &annotation;
         tly_config = true;
       }
@@ -273,11 +274,11 @@ std::vector<JavaEmitter::ComponentField> JavaEmitter::CollectComponentFields(
     ComponentField field;
     field.member = &member;
     for (const AnnotationArgument& argument : config->arguments) {
-      if (argument.name == "根布局") {
+      if (argument.name == annotation::kRootLayout) {
         field.is_root = argument.value == "真";
         continue;
       }
-      if (argument.name == "父布局") {
+      if (argument.name == annotation::kParentLayout) {
         field.parent = argument.value;
         continue;
       }
@@ -344,11 +345,11 @@ std::vector<JavaEmitter::ComponentField> JavaEmitter::CollectComponentFields(
     if (tly_config) {
       std::vector<ComponentProperty> rest;
       for (auto& property : field.properties) {
-        if (property.name == "根布局") {
+        if (property.name == annotation::kRootLayout) {
           field.is_root = property.value == "真";
           continue;
         }
-        if (property.name == "父布局") {
+        if (property.name == annotation::kParentLayout) {
           field.parent = property.value;
           continue;
         }
@@ -479,7 +480,8 @@ std::string JavaEmitter::OnCreateComponentReturnTypeName(const ClassInfo& klass)
         }
       }
 
-      for (const char* candidate : {"布局组件", "可视化组件", "窗口组件"}) {
+      for (const char* candidate :
+           {kLayoutComponentClass, kVisualComponentClass, kWindowComponentClass}) {
         if (line.find(candidate) != std::string::npos)
           return candidate;
       }
@@ -507,7 +509,7 @@ std::string JavaEmitter::OnCreateComponentReturnTypeName(const ClassInfo& klass)
       break;
     cursor = symbols_.Resolve(cursor->declaration->base_name, cursor);
   }
-  return "布局组件";
+  return kLayoutComponentClass;
 }
 
 bool JavaEmitter::EmitOnCreateComponent(const ClassInfo& klass,
@@ -571,7 +573,8 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
         *body += "\n";
       const std::string resolved = SubstituteCode(klass, member.code_text, {});
       int code_offset = 0;
-      for (const std::string& line : NormalizeCodeBlock(resolved, 2, member.code_indent)) {
+      for (const std::string& line :
+           NormalizeCodeBlock(resolved, kClassMemberIndentLevel, member.code_indent)) {
         body->Mark(
             current_file_,
             (member.code_first_line > 0 ? member.code_first_line : member.code_line) + code_offset);
@@ -607,7 +610,7 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
               " " + parameter_name;
         }
         *body += "\n  ";
-        if (!HasAnnotationMember(member, "隐藏"))
+        if (!HasAnnotationMember(member, annotation::kHidden))
           *body += "public ";
         *body +=
             "static " + return_type + " " + names_.MemberName(member) + "(" + parameters + ") {\n";
@@ -629,13 +632,13 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
             parameter.type_name.empty() ? "Object" : JavaTypeOf(klass, parameter.type_name);
         parameters += type + " " + names_.LocalName(parameter.name);
       }
-      const bool is_static =
-          std::any_of(member.annotations.begin(), member.annotations.end(),
-                      [](const Annotation& annotation) { return annotation.name == "静态"; });
+      const bool is_static = std::any_of(
+          member.annotations.begin(), member.annotations.end(),
+          [](const Annotation& annotation) { return annotation.name == annotation::kStatic; });
       *body += "\n  ";
-      if (!HasAnnotationMember(member, "隐藏"))
+      if (!HasAnnotationMember(member, annotation::kHidden))
         *body += "public ";
-      const std::string member_prefix = MemberCodeAnnotation(member, "前缀代码");
+      const std::string member_prefix = MemberCodeAnnotation(member, annotation::kPrefixCode);
       const std::string member_suffix = MemberCodeAnnotation(member, "后缀代码");
       if (!member_prefix.empty()) {
         *body += member_prefix;
@@ -646,7 +649,7 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       std::string method_name = names_.MemberName(member);
       if (member.kind == MemberKind::kEventBlock && !member.event_object.empty() &&
           symbols_.Resolve(member.event_object, &klass) == nullptr) {
-        const bool pinyin = config_.friendly_name == "pinyin";
+        const bool pinyin = IsPinyinNaming(config_.friendly_name);
         const std::string object_name = renames_.count(member.event_object) != 0
                                             ? renames_[member.event_object]
                                             : member.event_object;
@@ -664,11 +667,11 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
     case MemberKind::kVariable:
     case MemberKind::kConstant: {
       if (resources_ != nullptr && resources_->IsResourceField(klass, member)) {
-        const bool resource_static =
-            std::any_of(member.annotations.begin(), member.annotations.end(),
-                        [](const Annotation& annotation) { return annotation.name == "静态"; });
+        const bool resource_static = std::any_of(
+            member.annotations.begin(), member.annotations.end(),
+            [](const Annotation& annotation) { return annotation.name == annotation::kStatic; });
         *body += "  ";
-        if (!HasAnnotationMember(member, "隐藏"))
+        if (!HasAnnotationMember(member, annotation::kHidden))
           *body += "public ";
         if (resource_static)
           *body += "static ";
@@ -679,13 +682,13 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
 
       const std::string type =
           member.type_name.empty() ? "Object" : JavaTypeOf(klass, member.type_name);
-      const bool static_field =
-          std::any_of(member.annotations.begin(), member.annotations.end(),
-                      [](const Annotation& annotation) { return annotation.name == "静态"; });
+      const bool static_field = std::any_of(
+          member.annotations.begin(), member.annotations.end(),
+          [](const Annotation& annotation) { return annotation.name == annotation::kStatic; });
       *body += "  ";
-      if (!HasAnnotationMember(member, "隐藏"))
+      if (!HasAnnotationMember(member, annotation::kHidden))
         *body += "public ";
-      const std::string field_prefix = MemberCodeAnnotation(member, "前缀代码");
+      const std::string field_prefix = MemberCodeAnnotation(member, annotation::kPrefixCode);
       if (!field_prefix.empty()) {
         *body += field_prefix;
         *body += " ";
@@ -719,7 +722,8 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
 
         const bool has_component_config = std::any_of(
             member.annotations.begin(), member.annotations.end(), [](const Annotation& annotation) {
-              return annotation.name == "组件配置" || annotation.name == "布局配置";
+              return annotation.name == annotation::kComponentConfig ||
+                     annotation.name == annotation::kLayoutConfig;
             });
         const bool nullable = member.type_name.find('?') != std::string::npos;
         const bool array = member.type_name.find('[') != std::string::npos;
@@ -735,7 +739,7 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
     case MemberKind::kEventDefinition: {
       if (member.name.empty())
         return;
-      const bool pinyin_event = config_.friendly_name == "pinyin";
+      const bool pinyin_event = IsPinyinNaming(config_.friendly_name);
       const std::string event_part = pinyin_event ? PinyinCamel(member.name) : member.name;
       const std::string listener = event_part + "Listener";
       const std::string store = names_.MemberName(member) + "_v";
@@ -757,7 +761,7 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       const bool has_return = !member.type_name.empty();
 
       *body += "\n  ";
-      if (!HasAnnotationMember(member, "隐藏"))
+      if (!HasAnnotationMember(member, annotation::kHidden))
         *body += "public ";
       *body += return_type + " " + names_.MemberName(member) + "(" + parameters + ") {\n";
       *body += "    if (" + store + " != null) {\n";
@@ -818,7 +822,8 @@ void JavaEmitter::EmitMemberBody(const ClassInfo& klass, const Member& member, E
     const std::string resolved = SubstituteCode(klass, member.code_text, current_parameters_);
     current_code_line_ = 0;
     int code_offset = 0;
-    for (const std::string& line : NormalizeCodeBlock(resolved, 4, member.code_indent)) {
+    for (const std::string& line :
+         NormalizeCodeBlock(resolved, kMethodBodyIndentLevel, member.code_indent)) {
       body->Mark(
           current_file_,
           (member.code_first_line > 0 ? member.code_first_line : member.code_line) + code_offset);
@@ -850,11 +855,11 @@ void JavaEmitter::EmitMemberBody(const ClassInfo& klass, const Member& member, E
   referenced_locals_ = UsedLocalNames(member);
   subscriptions_emitted_ = false;
   for (const StmtPtr& statement : member.body) {
-    EmitStatement(klass, *statement, 2, body);
+    EmitStatement(klass, *statement, kMethodBodyIndentLevel, body);
   }
 
-  if (!subscriptions_emitted_ && member.name == "创建完毕") {
-    EmitSubscriptions(klass, 2, body);
+  if (!subscriptions_emitted_ && member.name == kCreateCompletedMember) {
+    EmitSubscriptions(klass, kMethodBodyIndentLevel, body);
   }
   subscriptions_emitted_ = false;
 }
@@ -901,7 +906,7 @@ bool JavaEmitter::EmitSubscriptions(const ClassInfo& klass, int indent, EmittedT
     if (owner == nullptr || event_definition == nullptr)
       continue;
 
-    const bool pinyin_mode = config_.friendly_name == "pinyin";
+    const bool pinyin_mode = IsPinyinNaming(config_.friendly_name);
     const std::string definition_part =
         pinyin_mode ? PinyinCamel(event_definition->name) : event_definition->name;
     const std::string listener_name = definition_part + "Listener";
@@ -930,7 +935,7 @@ bool JavaEmitter::EmitSubscriptions(const ClassInfo& klass, int indent, EmittedT
     body->append("@Override\n");
     Indent(indent + 1, body);
     body->append("public void dispatch(" + parameters + ") {\n");
-    Indent(indent + 2, body);
+    Indent(indent + kAnonymousClassBodyOffset, body);
     body->append(handler + "(" + argument_names + ");\n");
     Indent(indent + 1, body);
     body->append("}\n");
@@ -940,10 +945,7 @@ bool JavaEmitter::EmitSubscriptions(const ClassInfo& klass, int indent, EmittedT
     for (const Annotation& annotation : event_definition->annotations) {
       if (annotation.name != "属性需求")
         continue;
-      const std::string property =
-          annotation.StringArgument("参数").empty() && !annotation.arguments.empty()
-              ? annotation.arguments.front().value
-              : annotation.StringArgument("参数");
+      const std::string property = annotation.TextArgument(kArgumentParameter);
       if (property.empty())
         continue;
       Indent(indent, body);
@@ -1040,8 +1042,7 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       LineRef inline_ref;
       if (TryInlineCode(klass, *statement.expr, &inlined, &inline_ref)) {
         int code_offset = 0;
-        for (const std::string& line :
-             NormalizeCodeBlock(inlined, indent * 2, inline_code_indent_)) {
+        for (const std::string& line : NormalizeCodeBlock(inlined, indent, inline_code_indent_)) {
           if (inline_ref.line > 0) {
             out->Mark(inline_ref.file, inline_ref.line + code_offset);
           }
@@ -1061,8 +1062,7 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       const std::string resolved = SubstituteCode(klass, statement.code_text, current_parameters_);
       current_code_line_ = 0;
       int code_offset = 0;
-      for (const std::string& line :
-           NormalizeCodeBlock(resolved, indent * 2, statement.code_indent)) {
+      for (const std::string& line : NormalizeCodeBlock(resolved, indent, statement.code_indent)) {
         out->Mark(current_file_, (statement.code_first_line > 0 ? statement.code_first_line
                                                                 : statement.code_line) +
                                      code_offset);
@@ -1132,7 +1132,8 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       return;
     }
     case StmtKind::kLoopCount: {
-      const std::string counter = names_.GeneratedName("rn_", ++generated_name_counter_);
+      const std::string counter =
+          names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
       const std::string begin =
           statement.loop_begin != nullptr ? EmitExpression(klass, *statement.loop_begin) : "0";
       const std::string end =
@@ -1200,7 +1201,8 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
           element_type = types_.MapType(first, &klass);
         }
       }
-      const std::string iterator = names_.GeneratedName("rn_", ++generated_name_counter_);
+      const std::string iterator =
+          names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
       Indent(indent, out);
       out->append("for (" + element_type + " " + iterator + " : " +
                   EmitExpression(klass, *statement.expr) + ") {\n");
@@ -1302,7 +1304,7 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       if (definition == nullptr || owner == nullptr)
         return;
 
-      const bool pinyin_mode = config_.friendly_name == "pinyin";
+      const bool pinyin_mode = IsPinyinNaming(config_.friendly_name);
       const std::string event_part = pinyin_mode ? PinyinCamel(definition->name) : definition->name;
       const std::string listener_name = event_part + "Listener";
       const std::string listener = names_.ClassName(*owner) + "." + listener_name;
@@ -1352,7 +1354,7 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       Indent(indent + 1, out);
       out->append("public " + return_type + " dispatch(" + parameters + ") {\n");
       for (const StmtPtr& child : statement.body) {
-        EmitStatement(klass, *child, indent + 2, out);
+        EmitStatement(klass, *child, indent + kAnonymousClassBodyOffset, out);
       }
       if (statement.end_line > 0)
         out->Mark(current_file_, statement.end_line);
@@ -1384,7 +1386,8 @@ bool JavaEmitter::IsComponentClass(const ClassInfo& klass) const {
   std::set<const ClassInfo*> visited;
   while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
     const std::string simple = cursor->qualified_name.substr(cursor->qualified_name.rfind('.') + 1);
-    if (simple == "窗口组件" || simple == "可视化组件" || simple == "布局组件")
+    if (simple == kWindowComponentClass || simple == kVisualComponentClass ||
+        simple == kLayoutComponentClass)
       return true;
     if (cursor->declaration->base_name.empty())
       break;
@@ -1397,7 +1400,7 @@ bool JavaEmitter::IsComponentContainerClass(const ClassInfo& klass) const {
   std::set<const ClassInfo*> visited;
   while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
     const std::string simple = cursor->qualified_name.substr(cursor->qualified_name.rfind('.') + 1);
-    if (simple == "组件容器")
+    if (simple == kComponentContainerClass)
       return true;
     if (cursor->declaration->base_name.empty())
       break;
@@ -1442,4 +1445,4 @@ void JavaEmitter::ReportUnresolvedType(const ClassInfo& klass, const std::string
                     "暂不支持的未解析类型: \"" + type_name + "\"", "codegen.type.unresolved");
 }
 
-}  // namespace tiecodec
+}

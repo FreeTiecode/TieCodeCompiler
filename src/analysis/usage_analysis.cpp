@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <set>
 
+#include "constants.h"
 #include "local_use.h"
 #include "symbol_resolution.h"
+#include "text_util.h"
 
 namespace tiecodec {
 namespace {
@@ -12,14 +14,6 @@ namespace {
 std::string SimpleName(const std::string& qualified_name) {
   const std::size_t dot = qualified_name.rfind('.');
   return dot == std::string::npos ? qualified_name : qualified_name.substr(dot + 1);
-}
-
-bool HasMember(const ClassDecl& declaration, const std::string& name) {
-  for (const Member& member : declaration.members) {
-    if (member.name == name)
-      return true;
-  }
-  return false;
 }
 
 void CollectReference(const SymbolTable& symbols, const ClassInfo* context,
@@ -83,7 +77,7 @@ void CollectFromStatement(const SymbolTable& symbols, const ClassInfo* context, 
     return;
   CollectReference(symbols, context, stmt->type_name, output);
   if (stmt->kind == StmtKind::kLoopCount) {
-    CollectReference(symbols, context, "整数", output);
+    CollectReference(symbols, context, builtin_type::kInteger, output);
   }
   CollectFromExpression(symbols, context, stmt->expr.get(), output);
   CollectFromExpression(symbols, context, stmt->loop_begin.get(), output);
@@ -311,15 +305,15 @@ struct UsedMemberCollector {
       }
       case ExprKind::kLiteral: {
         if (expression->text == "真" || expression->text == "假")
-          return "逻辑型";
+          return builtin_type::kBoolean;
         if (!expression->raw.empty() && (expression->raw[0] == '"' || expression->raw[0] == '[')) {
-          return "文本";
+          return builtin_type::kText;
         }
         if (!expression->raw.empty() && expression->raw[0] == '\'')
-          return "字符";
+          return builtin_type::kCharacter;
         if (expression->text.find('.') != std::string::npos)
-          return "小数";
-        return "整数";
+          return builtin_type::kDecimal;
+        return builtin_type::kInteger;
       }
       case ExprKind::kFieldAccess: {
         const ClassInfo* receiver =
@@ -402,6 +396,21 @@ struct UsedMemberCollector {
               }
             }
           }
+          if (target->kind == ExprKind::kArrayAccess && !target->children.empty() &&
+              target->children[0] != nullptr) {
+            const Expr* receiver = target->children[0].get();
+            const ClassInfo* receiver_class = ReceiverClassOf(context, locals, receiver);
+            if (receiver_class == nullptr && receiver->kind == ExprKind::kIdentifier) {
+              receiver_class = symbols.Resolve(receiver->text, &context);
+            }
+            if (receiver_class != nullptr) {
+              const ClassInfo* owner = nullptr;
+              if (const Member* indexer = LookupMemberOfKind(*receiver_class, kOperatorIndexAssign,
+                                                             MemberKind::kMethod, &owner)) {
+                MarkUsed(owner, indexer);
+              }
+            }
+          }
           ScanExpression(context, locals, expression->children[1].get());
           break;
         }
@@ -423,6 +432,48 @@ struct UsedMemberCollector {
           } else if (const Member* field =
                          FindMemberInChain(symbols, *receiver_class, expression->text, &owner)) {
             MarkUsed(owner, field);
+          }
+        }
+        break;
+      }
+      case ExprKind::kArrayAccess: {
+        if (expression->children.empty() || expression->children[0] == nullptr)
+          break;
+        const Expr* receiver = expression->children[0].get();
+        const ClassInfo* receiver_class = ReceiverClassOf(context, locals, receiver);
+        if (receiver_class == nullptr && receiver->kind == ExprKind::kIdentifier) {
+          receiver_class = symbols.Resolve(receiver->text, &context);
+        }
+        if (receiver_class != nullptr) {
+          const ClassInfo* owner = nullptr;
+          if (const Member* indexer = LookupMemberOfKind(*receiver_class, kOperatorIndex,
+                                                         MemberKind::kMethod, &owner)) {
+            MarkUsed(owner, indexer);
+          }
+        }
+        break;
+      }
+      case ExprKind::kExchange: {
+        for (const ExprPtr& operand : expression->children) {
+          if (operand == nullptr || operand->kind != ExprKind::kArrayAccess ||
+              operand->children.empty() || operand->children[0] == nullptr) {
+            continue;
+          }
+          const Expr* receiver = operand->children[0].get();
+          const ClassInfo* receiver_class = ReceiverClassOf(context, locals, receiver);
+          if (receiver_class == nullptr && receiver->kind == ExprKind::kIdentifier) {
+            receiver_class = symbols.Resolve(receiver->text, &context);
+          }
+          if (receiver_class == nullptr)
+            continue;
+          const ClassInfo* owner = nullptr;
+          if (const Member* reader = LookupMemberOfKind(*receiver_class, kOperatorIndex,
+                                                        MemberKind::kMethod, &owner)) {
+            MarkUsed(owner, reader);
+          }
+          if (const Member* writer = LookupMemberOfKind(*receiver_class, kOperatorIndexAssign,
+                                                        MemberKind::kMethod, &owner)) {
+            MarkUsed(owner, writer);
           }
         }
         break;
@@ -627,9 +678,9 @@ struct UsedMemberCollector {
               for (const Annotation& annotation : definition->annotations) {
                 if (annotation.name != "属性需求")
                   continue;
-                const std::string property = !annotation.arguments.empty()
-                                                 ? annotation.arguments.front().value
-                                                 : annotation.StringArgument("参数");
+                const std::string property = annotation.arguments.empty()
+                                                 ? std::string()
+                                                 : Unquote(annotation.arguments.front().value);
                 if (property.empty())
                   continue;
                 const ClassInfo* cursor2 = definition_owner;
@@ -707,10 +758,11 @@ struct UsedMemberCollector {
         if (member.kind == MemberKind::kEventBlock) {
           MarkUsed(klass, &member);
         }
-        const bool forced = std::any_of(
-            member.annotations.begin(), member.annotations.end(), [](const Annotation& annotation) {
-              return annotation.name == "强制输出" || annotation.name == "主题配置";
-            });
+        const bool forced = std::any_of(member.annotations.begin(), member.annotations.end(),
+                                        [](const Annotation& annotation) {
+                                          return annotation.name == annotation::kForcedOutput ||
+                                                 annotation.name == annotation::kThemeConfig;
+                                        });
         if (forced)
           MarkUsed(klass, &member);
       }
@@ -724,7 +776,8 @@ struct UsedMemberCollector {
       for (const Member& member : klass->declaration->members) {
         const bool component_config = std::any_of(
             member.annotations.begin(), member.annotations.end(), [](const Annotation& annotation) {
-              return annotation.name == "组件配置" || annotation.name == "布局配置";
+              return annotation.name == annotation::kComponentConfig ||
+                     annotation.name == annotation::kLayoutConfig;
             });
         if (component_config)
           MarkUsed(klass, &member);
@@ -744,6 +797,11 @@ struct UsedMemberCollector {
     }
 
     for (const RequiredMember& required : required_members) {
+      if (required.class_name == kAsyncSchedulerName)
+        continue;
+      if (required.class_name == kWindowComponentClass &&
+          required.member_name == kCreateCompletedMember)
+        continue;
       for (const std::string& qualified_name : symbols.class_names()) {
         if (SimpleName(qualified_name) != required.class_name)
           continue;
@@ -768,7 +826,7 @@ struct UsedMemberCollector {
   }
 };
 
-}  // namespace
+}
 
 std::set<const Member*> ComputeUsedMembers(
     const SymbolTable& symbols, const EnvironmentContract& contract, const ClassInfo* entry,
@@ -780,8 +838,98 @@ std::set<const Member*> ComputeUsedMembers(
   return used;
 }
 
+namespace {
+
+void CollectAwaitExprs(const Expr* expression, std::vector<const Expr*>* awaits) {
+  if (expression == nullptr)
+    return;
+  if (expression->kind == ExprKind::kAwait)
+    awaits->push_back(expression);
+  for (const ExprPtr& child : expression->children)
+    CollectAwaitExprs(child.get(), awaits);
+}
+
+bool StatementContainsAwaitNode(const Stmt* statement);
+
+bool ExpressionListContainsAwait(const std::vector<ExprPtr>& expressions) {
+  for (const ExprPtr& expression : expressions) {
+    std::vector<const Expr*> awaits;
+    CollectAwaitExprs(expression.get(), &awaits);
+    if (!awaits.empty())
+      return true;
+  }
+  return false;
+}
+
+bool StatementContainsAwaitNode(const Stmt* statement) {
+  if (statement == nullptr)
+    return false;
+  if (ExpressionListContainsAwait(
+          {statement->expr, statement->loop_begin, statement->loop_end, statement->loop_step})) {
+    return true;
+  }
+  for (const SwitchCase& switch_case : statement->cases) {
+    if (ExpressionListContainsAwait(switch_case.values))
+      return true;
+    for (const StmtPtr& child : switch_case.body) {
+      if (StatementContainsAwaitNode(child.get()))
+        return true;
+    }
+  }
+  for (const StmtPtr& child : statement->body) {
+    if (StatementContainsAwaitNode(child.get()))
+      return true;
+  }
+  for (const StmtPtr& child : statement->else_body) {
+    if (StatementContainsAwaitNode(child.get()))
+      return true;
+  }
+  return false;
+}
+
+bool ListHasPostAwaitStatement(const std::vector<StmtPtr>& list) {
+  bool previous_has_await = false;
+  for (const StmtPtr& statement : list) {
+    if (statement == nullptr)
+      continue;
+    if (previous_has_await)
+      return true;
+    if (ListHasPostAwaitStatement(statement->body))
+      return true;
+    if (ListHasPostAwaitStatement(statement->else_body))
+      return true;
+    for (const SwitchCase& switch_case : statement->cases) {
+      if (ListHasPostAwaitStatement(switch_case.body))
+        return true;
+    }
+    previous_has_await = StatementContainsAwaitNode(statement.get());
+  }
+  return false;
+}
+
+}
+
+bool AsyncMemberUsesGlobalScheduler(const Member& member) {
+  bool is_async = false;
+  bool independent = false;
+  for (const Annotation& annotation : member.annotations) {
+    if (annotation.name != annotation::kAsyncMethod)
+      continue;
+    is_async = true;
+    for (const AnnotationArgument& argument : annotation.arguments) {
+      if (argument.name == "独立线程")
+        independent = argument.value == "真" || argument.value == "true";
+    }
+  }
+  if (!is_async)
+    return false;
+  if (!independent)
+    return true;
+  return ListHasPostAwaitStatement(member.body);
+}
+
 OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContract& contract,
-                             const ClassInfo* entry) {
+                             const ClassInfo* entry, bool designer_profile) {
   OutputPlan plan;
   if (entry == nullptr)
     return plan;
@@ -796,6 +944,33 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
     current = symbols.Resolve(current->declaration->base_name, current);
   }
 
+  if (designer_profile) {
+    for (const auto& entry_classes : symbols.classes()) {
+      const ClassInfo& klass = entry_classes.second;
+      if (klass.declaration == nullptr ||
+          !klass.declaration->HasAnnotation(annotation::kNoInstantiation))
+        continue;
+      bool component = false;
+      const ClassInfo* cursor = &klass;
+      std::set<const ClassInfo*> visited;
+      while (cursor != nullptr && cursor->declaration != nullptr && visited.insert(cursor).second) {
+        if (cursor->declaration->name == kWindowComponentClass)
+          component = true;
+        if (cursor->declaration->base_name.empty())
+          break;
+        cursor = symbols.Resolve(cursor->declaration->base_name, cursor);
+      }
+      if (!component)
+        continue;
+      const ClassInfo* chain = &klass;
+      while (chain != nullptr && chain->declaration != nullptr && classes.insert(chain).second) {
+        if (chain->declaration->base_name.empty())
+          break;
+        chain = symbols.Resolve(chain->declaration->base_name, chain);
+      }
+    }
+  }
+
   for (const auto& entry_classes : symbols.classes()) {
     const ClassInfo& klass = entry_classes.second;
     if (klass.declaration == nullptr)
@@ -804,13 +979,10 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
     for (const Annotation& annotation : klass.declaration->annotations) {
       if (annotation.name == "全局应用")
         forced = true;
-      if (annotation.name != "强制输出")
+      if (annotation.name != annotation::kForcedOutput)
         continue;
-      std::string value = annotation.StringArgument("参数");
-      if (value.empty() && !annotation.arguments.empty()) {
-        value = annotation.arguments.front().value;
-      }
-      if (value == "真" || value == "true" || value == "1")
+      const std::string value = annotation.TextArgument(kArgumentParameter);
+      if (!value.empty() && IsTruthyLiteral(value))
         forced = true;
     }
     if (!forced)
@@ -846,9 +1018,10 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
       for (const Member* member : plan.members) {
         if (member == nullptr)
           continue;
-        const bool theme =
-            std::any_of(member->annotations.begin(), member->annotations.end(),
-                        [](const Annotation& annotation) { return annotation.name == "主题配置"; });
+        const bool theme = std::any_of(member->annotations.begin(), member->annotations.end(),
+                                       [](const Annotation& annotation) {
+                                         return annotation.name == annotation::kThemeConfig;
+                                       });
         if (!theme)
           continue;
         const ClassInfo* owner = nullptr;
@@ -882,7 +1055,8 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
       for (const Member& member : klass->declaration->members) {
         const Annotation* config = nullptr;
         for (const Annotation& annotation : member.annotations) {
-          if (annotation.name == "组件配置" || annotation.name == "布局配置")
+          if (annotation.name == annotation::kComponentConfig ||
+              annotation.name == annotation::kLayoutConfig)
             config = &annotation;
         }
         if (config == nullptr)
@@ -892,14 +1066,15 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
           continue;
         std::string parent_value;
         for (const AnnotationArgument& argument : config->arguments) {
-          if (argument.name == "父布局")
+          if (argument.name == annotation::kParentLayout)
             parent_value = argument.value;
-          if (argument.name == "根布局")
+          if (argument.name == annotation::kRootLayout)
             continue;
         }
         for (const AnnotationArgument& argument : config->arguments) {
           std::string table = argument.value;
-          if (!argument.name.empty() && argument.name != "根布局" && argument.name != "父布局") {
+          if (!argument.name.empty() && argument.name != annotation::kRootLayout &&
+              argument.name != annotation::kParentLayout) {
             table.clear();
           }
           std::size_t begin = 0;
@@ -917,7 +1092,7 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
               key.erase(key.begin());
             while (!key.empty() && (key.back() == ' ' || key.back() == '}'))
               key.pop_back();
-            if (key.empty() || key == "根布局" || key == "父布局")
+            if (key.empty() || key == annotation::kRootLayout || key == annotation::kParentLayout)
               continue;
             if (key[0] == '$') {
               std::string property_name = key.substr(1);
@@ -999,6 +1174,21 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
       if (classes.size() != before)
         changed = true;
     }
+    for (const Member* member : plan.members) {
+      if (member == nullptr || !AsyncMemberUsesGlobalScheduler(*member))
+        continue;
+      for (const std::string& class_name : symbols.class_names()) {
+        if (SimpleName(class_name) != kAsyncSchedulerName)
+          continue;
+        const ClassInfo* scheduler = symbols.Find(class_name);
+        if (scheduler == nullptr)
+          continue;
+        const std::size_t before = classes.size();
+        add_with_bases(scheduler, &classes);
+        if (classes.size() != before)
+          changed = true;
+      }
+    }
     if (!changed)
       break;
   }
@@ -1065,4 +1255,4 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
   }
   return plan;
 }
-}  // namespace tiecodec
+}

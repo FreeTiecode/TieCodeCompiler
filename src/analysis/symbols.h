@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ast.h"
+#include "constants.h"
 #include "diagnostics.h"
 
 namespace tiecodec {
@@ -57,8 +58,6 @@ private:
   std::map<std::string, std::string> package_output_names_;
 };
 
-constexpr const char* kEntryClassName = "启动窗口";
-
-}  // namespace tiecodec
+}
 
 #endif

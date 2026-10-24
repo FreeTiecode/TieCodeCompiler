@@ -17,4 +17,5 @@ ConstructorInitializerIndentWidth: 4
 ContinuationIndentWidth: 4
 BreakBeforeBraces: Attach
 AlignAfterOpenBracket: Align
+FixNamespaceComments: false
 ...

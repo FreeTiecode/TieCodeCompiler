@@ -19,4 +19,4 @@ const ClassInfo* FindEntryClass(const SymbolTable& symbols, const std::string& n
   return nullptr;
 }
 
-}  // namespace tiecodec
+}

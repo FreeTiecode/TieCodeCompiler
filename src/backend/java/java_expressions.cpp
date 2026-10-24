@@ -460,6 +460,27 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
                                &property_write)) {
         return property_write;
       }
+      if (expression.children[0]->kind == ExprKind::kArrayAccess &&
+          expression.children[0]->children.size() >= 2 &&
+          expression.children[0]->children[0] != nullptr) {
+        const Expr& access = *expression.children[0];
+        const std::string target_type = StaticTypeNameOf(klass, *access.children[0]);
+        if (!target_type.empty() && target_type.find('[') == std::string::npos) {
+          const ClassInfo* target_class = symbols_.Resolve(BaseResolvableName(target_type), &klass);
+          if (target_class != nullptr) {
+            const ClassInfo* owner = nullptr;
+            if (const Member* indexer = FindMemberInChain(symbols_, *target_class, "[]=", &owner)) {
+              std::string value_type;
+              if (indexer->parameters.size() >= 2)
+                value_type = indexer->parameters[1].type_name;
+              return EmitExpression(klass, *access.children[0]) + "." +
+                     names_.MemberName(*indexer) + "(" +
+                     EmitExpression(klass, *access.children[1]) + ", " +
+                     EmitConverted(klass, value_type, *expression.children[1]) + ")";
+            }
+          }
+        }
+      }
       const std::string target_type = StaticTypeNameOf(klass, *expression.children[0]);
       return EmitExpression(klass, *expression.children[0]) + " = " +
              EmitConverted(klass, target_type, *expression.children[1]);
@@ -468,6 +489,18 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
       if (expression.children.size() < 2 || expression.children[0] == nullptr ||
           expression.children[1] == nullptr) {
         return {};
+      }
+      const std::string target_type = StaticTypeNameOf(klass, *expression.children[0]);
+      if (!target_type.empty() && target_type.find('[') == std::string::npos) {
+        const ClassInfo* target_class = symbols_.Resolve(BaseResolvableName(target_type), &klass);
+        if (target_class != nullptr) {
+          const ClassInfo* owner = nullptr;
+          if (const Member* indexer = FindMemberInChain(symbols_, *target_class, "[]", &owner)) {
+            return EmitExpression(klass, *expression.children[0]) + "." +
+                   names_.MemberName(*indexer) + "(" +
+                   EmitExpression(klass, *expression.children[1]) + ")";
+          }
+        }
       }
       return EmitExpression(klass, *expression.children[0]) + "[" +
              EmitExpression(klass, *expression.children[1]) + "]";
@@ -551,7 +584,6 @@ std::string JavaEmitter::SubstituteCode(const ClassInfo& klass, const std::strin
     static const char* kKeywords[] = {"cls", "ncls", "mem", "expr", "get", "set", "sys"};
     bool handled = false;
     for (const char* keyword : kKeywords) {
-      const std::size_t length = std::char_traits<char>::length(keyword);
       if (name != keyword || name_end >= code.size() || code[name_end] != '<')
         continue;
       std::size_t index = name_end;
@@ -585,7 +617,6 @@ std::string JavaEmitter::SubstituteCode(const ClassInfo& klass, const std::strin
       } else if (key == "get" || key == "set") {
         const MemberKind wanted =
             key == "get" ? MemberKind::kPropertyRead : MemberKind::kPropertyWrite;
-        const ClassInfo* owner = nullptr;
         const Member* property = nullptr;
         const ClassInfo* cursor = &klass;
         std::set<const ClassInfo*> visited;
@@ -602,9 +633,7 @@ std::string JavaEmitter::SubstituteCode(const ClassInfo& klass, const std::strin
         result += property == nullptr ? content : names_.MemberName(*property);
       } else {
         if (content == "main_pkg") {
-          const auto r_namespace = config_.options.find("r-namespace");
-          result +=
-              r_namespace == config_.options.end() ? config_.namespace_name : r_namespace->second;
+          result += config_.Option(option::kRNamespace, config_.namespace_name);
         } else if (content == "source") {
           result += klass.declaration != nullptr ? klass.declaration->file : std::string();
         } else if (content == "line") {
@@ -770,4 +799,4 @@ bool JavaEmitter::TryInlineCode(const ClassInfo& klass, const Expr& call, std::s
   return true;
 }
 
-}  // namespace tiecodec
+}

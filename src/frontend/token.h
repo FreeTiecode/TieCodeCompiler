@@ -39,6 +39,6 @@ struct Token {
 
 const char* TokenKindName(TokenKind kind);
 
-}  // namespace tiecodec
+}
 
 #endif

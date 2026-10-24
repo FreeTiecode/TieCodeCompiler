@@ -31,4 +31,4 @@ void FileSystemOutputSink::CreateDirectory(const std::string& relative_path) {
   std::filesystem::create_directories(std::filesystem::path(root_) / relative_path, error);
 }
 
-}  // namespace tiecodec
+}

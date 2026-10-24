@@ -35,7 +35,7 @@ const char* SeverityLabel(Diagnostic::Severity severity) {
   return "提示";
 }
 
-}  // namespace
+}
 
 void ConsoleDiagnosticReporter::Report(const Diagnostic& diagnostic) {
   std::string line = SeverityPrefix(diagnostic.severity);
@@ -121,4 +121,4 @@ void Diagnostics::Flush(DiagnosticReporter& reporter) const {
     reporter.Report(diagnostic);
 }
 
-}  // namespace tiecodec
+}

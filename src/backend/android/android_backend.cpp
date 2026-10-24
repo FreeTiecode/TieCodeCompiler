@@ -2,6 +2,7 @@
 
 #include <functional>
 
+#include "constants.h"
 #include "java_type_mapper.h"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <utility>
 
 #include "internal/helpers.h"
 #include "symbol_resolution.h"
@@ -23,6 +25,11 @@ using namespace detail;
 AndroidBackend::AndroidBackend(const SymbolTable& symbols) : symbols_(symbols) {}
 
 namespace {
+
+constexpr const char* kJavaSourceSuffix = ".java";
+constexpr const char* kAndroidManifestFile = "AndroidManifest.xml";
+constexpr const char* kMetadataFile = "metadata.json";
+constexpr const char* kLibsDirectory = "libs";
 
 bool ResolveConstantString(const SymbolTable& symbols, const ClassInfo& context,
                            const std::string& reference, std::string* value) {
@@ -47,18 +54,17 @@ bool ResolveConstantString(const SymbolTable& symbols, const ClassInfo& context,
   return false;
 }
 
-}  // namespace
+}
 
 bool AndroidBackend::Generate(const ClassInfo* entry, const BackendConfig& config,
                               Diagnostics& diagnostics) {
   options_ = config;
   diagnostics_ = &diagnostics;
   names_ = std::make_unique<JavaNames>(symbols_, options_);
-  const auto stable_names_path = options_.options.find("stable-names");
-  if (stable_names_path != options_.options.end() && !stable_names_path->second.empty()) {
-    names_->LoadStableNames(stable_names_path->second);
-  }
-  options_.options["r-namespace"] = names_->RNamespace();
+  const std::string stable_names_path = options_.Option(option::kStableNames);
+  if (!stable_names_path.empty())
+    names_->LoadStableNames(stable_names_path);
+  options_.options[option::kRNamespace] = names_->RNamespace();
   types_ = std::make_unique<JavaTypeMapper>(symbols_, names_.get());
   resources_ = std::make_unique<AndroidResourceBinder>(symbols_, options_);
   resources_->set_output_prefix(MainPrefix());
@@ -94,27 +100,11 @@ void AndroidBackend::PrepareLibraries() {
   std::set<std::string> seen;
   const std::vector<const ClassInfo*>& emitted =
       output_classes_ != nullptr ? *output_classes_ : std::vector<const ClassInfo*>();
-  const bool hard_mode =
-      options_.options.count("hard-mode") != 0 && options_.options.at("hard-mode") == "1";
-  const std::string libs_dir = GradleMode() ? "app/libs" : "libs";
+  const bool hard_mode = options_.Flag(option::kHardMode);
+  const std::string libs_dir = LibsDir();
   std::vector<std::filesystem::path> lib_search_prefixes;
-  {
-    const auto prefixes = options_.options.find("search-lib-prefix");
-    if (prefixes != options_.options.end()) {
-      std::string list = prefixes->second;
-      std::size_t begin = 0;
-      while (begin <= list.size()) {
-        const std::size_t end = list.find(';', begin);
-        const std::string prefix =
-            list.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
-        if (!prefix.empty())
-          lib_search_prefixes.emplace_back(prefix);
-        if (end == std::string::npos)
-          break;
-        begin = end + 1;
-      }
-    }
-  }
+  for (const std::string& prefix : options_.ListOption(option::kSearchLibPrefix))
+    lib_search_prefixes.emplace_back(prefix);
   const auto resolve_library_path = [&](const ClassDecl& declaration, const std::string& path) {
     std::filesystem::path candidate(path);
     if (!candidate.is_absolute()) {
@@ -144,10 +134,7 @@ void AndroidBackend::PrepareLibraries() {
     for (const Annotation& annotation : declaration.annotations) {
       if (annotation.name != "外部依赖库")
         continue;
-      std::string path = annotation.StringArgument("参数");
-      if (path.empty() && !annotation.arguments.empty()) {
-        path = annotation.arguments.front().value;
-      }
+      const std::string path = annotation.TextArgument(kArgumentParameter);
       if (path.empty())
         continue;
       bool compile_only = false;
@@ -178,8 +165,7 @@ void AndroidBackend::PrepareLibraries() {
       library_entries_.push_back(std::move(entry));
     }
   }
-  const bool hard_mode_enabled =
-      options_.options.count("hard-mode") != 0 && options_.options.at("hard-mode") == "1";
+  const bool hard_mode_enabled = options_.Flag(option::kHardMode);
   if (!library_entries_.empty() && sink_ != nullptr && hard_mode_enabled) {
     sink_->CreateDirectory(libs_dir);
   }
@@ -204,8 +190,7 @@ std::string AndroidBackend::LibsJson() const {
 }
 
 bool AndroidBackend::GradleMode() const {
-  const auto it = options_.options.find("android.gradle");
-  return it != options_.options.end() && it->second == "1";
+  return options_.Flag(option::kGradle);
 }
 
 std::string AndroidBackend::MainPrefix() const {
@@ -214,6 +199,10 @@ std::string AndroidBackend::MainPrefix() const {
 
 std::string AndroidBackend::SourceDir() const {
   return GradleMode() ? "java/" : "src/";
+}
+
+std::string AndroidBackend::LibsDir() const {
+  return GradleMode() ? std::string("app/") + kLibsDirectory : std::string(kLibsDirectory);
 }
 
 std::string AndroidBackend::ReadTemplate(const std::string& relative) const {
@@ -325,7 +314,7 @@ std::uint64_t AndroidBackend::SourceFileIndex(const std::string& file) {
 
 void AndroidBackend::RecordLineMap(const ClassInfo& klass, const ClassOutput& output) {
   JavaFileMapping file;
-  file.name = names_->ClassName(klass) + ".java";
+  file.name = names_->ClassName(klass) + kJavaSourceSuffix;
   for (std::size_t i = 0; i < output.line_refs.size(); ++i) {
     if (i == 0)
       continue;
@@ -463,7 +452,7 @@ std::string SubstituteManifestParameters(const std::string& content, const Membe
   return result;
 }
 
-}  // namespace
+}
 
 bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   const std::string package = options_.package_name;
@@ -494,14 +483,14 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
       if (target == nullptr)
         return;
       for (const Annotation& annotation : target->annotations) {
-        if (annotation.name != "附加清单")
+        if (annotation.name != annotation::kExtraManifest)
           continue;
         std::string node = "component.property";
         std::string content;
         for (const AnnotationArgument& argument : annotation.arguments) {
-          if (argument.name == "节点")
+          if (argument.name == annotation::kManifestNode)
             node = UnquoteAnnotationText(argument.value);
-          else if (argument.name.empty() || argument.name == "参数") {
+          else if (argument.name.empty() || argument.name == kArgumentParameter) {
             content = UnquoteAnnotationText(argument.value);
           }
         }
@@ -608,20 +597,17 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
     for (const Annotation& annotation : klass->declaration->annotations) {
       std::string value;
       if (annotation.name == "窗口主题") {
-        value = annotation.StringArgument("参数");
-        if (value.empty() && !annotation.arguments.empty()) {
-          value = annotation.arguments.front().value;
-        }
+        value = annotation.TextArgument(kArgumentParameter);
         component.theme = strip_quotes(value);
         continue;
       }
-      if (annotation.name != "附加清单")
+      if (annotation.name != annotation::kExtraManifest)
         continue;
       std::string node = "component.property";
       for (const AnnotationArgument& argument : annotation.arguments) {
-        if (argument.name == "节点")
+        if (argument.name == annotation::kManifestNode)
           node = strip_quotes(argument.value);
-        else if (argument.name.empty() || argument.name == "参数") {
+        else if (argument.name.empty() || argument.name == kArgumentParameter) {
           value = strip_quotes(argument.value);
         }
       }
@@ -636,8 +622,6 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
     components.push_back(std::move(component));
   }
 
-  // Components are emitted in sorted name order; the entry activity goes first
-  // when it owns fields of other emitted components, otherwise last.
   std::sort(components.begin(), components.end(),
             [](const ComponentEntry& a, const ComponentEntry& b) {
               if (a.is_entry != b.is_entry)
@@ -724,9 +708,7 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   manifest += "\t\tandroid:usesCleartextTraffic=\"true\"\n";
   manifest += "\t\tandroid:supportsRtl=\"true\"\n";
   manifest += "\t\tandroid:label=\"@string/app_name\"\n";
-  const auto release_option = options_.options.find("release");
-  const bool release_mode =
-      release_option != options_.options.end() && release_option->second != "0";
+  const bool release_mode = options_.Option(option::kRelease, "0") != "0";
   if (!release_mode) {
     manifest += "\t\tandroid:debuggable=\"true\"\n";
   }
@@ -768,7 +750,7 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   }
   manifest += "\t</application>\n";
   manifest += "</manifest>";
-  if (!WriteFile(MainPrefix() + "AndroidManifest.xml", manifest))
+  if (!WriteFile(MainPrefix() + kAndroidManifestFile, manifest))
     return false;
 
   resources_->Write(*sink_);
@@ -776,7 +758,6 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   PrepareLibraries();
   const std::string& out = options_.output_dir;
   const std::string prefix = MainPrefix();
-  const std::string libs_dir = GradleMode() ? "libs" : "libs";
   std::string metadata;
   metadata += "{\n";
   metadata += "  \"appConfig\": {\n";
@@ -793,7 +774,7 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   metadata += "    \"assetsDir\": \"" + out + "/" + prefix + "assets\",\n";
   metadata += "    \"extraResDirs\": [],\n";
   metadata += "    \"jniLibsDir\": \"" + out + "/" + prefix + "jniLibs\",\n";
-  metadata += "    \"libsDir\": \"" + out + "/" + (GradleMode() ? "app/" : "") + libs_dir + "\",\n";
+  metadata += "    \"libsDir\": \"" + out + "/" + LibsDir() + "\",\n";
   metadata += "    \"manifest\": \"" + out + "/" + prefix + "AndroidManifest.xml\",\n";
   metadata += "    \"packageName\": \"" + package + "\",\n";
   metadata += "    \"rNamespace\": \"" + names_->RNamespace() + "\",\n";
@@ -803,31 +784,53 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
               source_dir.substr(0, source_dir.size() - 1) + "\"\n";
   metadata += "  }\n";
   metadata += "}";
-  if (!WriteFile("metadata.json", metadata))
+  if (!WriteFile(kMetadataFile, metadata))
     return false;
 
-  const auto line_map_option = options_.options.find("line-map");
-  if (line_map_option != options_.options.end() && !line_map_option->second.empty()) {
+  const std::string line_map_path = options_.Option(option::kLineMap);
+  if (!line_map_path.empty()) {
     CollectMappingNames();
     std::string mapping_error;
-    if (!WriteSourceMapping(line_map_option->second, source_mapping_, &mapping_error)) {
+    if (!WriteSourceMapping(line_map_path, source_mapping_, &mapping_error)) {
       if (diagnostics_ != nullptr)
         diagnostics_->Fatal(mapping_error, "io.write");
       return false;
     }
   }
-  const auto emit_names_path = options_.options.find("emit-names");
-  if (emit_names_path != options_.options.end() && !emit_names_path->second.empty()) {
-    names_->SaveNames(emit_names_path->second);
-  }
+  const std::string emit_names_path = options_.Option(option::kEmitNames);
+  if (!emit_names_path.empty())
+    names_->SaveNames(emit_names_path);
   (void)entry;
   if (GradleMode() && !WriteGradleProject())
     return false;
   return true;
 }
 
+bool AndroidBackend::WriteClassFiles(const ClassInfo* klass, ClassOutput* output,
+                                     std::set<const ClassInfo*>* emitted_classes) {
+  if (klass == nullptr || klass->declaration == nullptr || klass->forbid_output)
+    return true;
+  if (emitted_classes != nullptr)
+    emitted_classes->insert(klass);
+  ClassOutput class_output = emitter_->EmitClass(*klass);
+  const std::string path =
+      MainPrefix() + SourceDir() + names_->ClassName(*klass) + kJavaSourceSuffix;
+  if (!WriteFile(path, class_output.text))
+    return false;
+  for (const auto& auxiliary : emitter_->TakeAuxiliaryClasses()) {
+    if (!WriteFile(MainPrefix() + SourceDir() + auxiliary.first + kJavaSourceSuffix,
+                   auxiliary.second)) {
+      return false;
+    }
+  }
+  if (output != nullptr)
+    *output = std::move(class_output);
+  return true;
+}
+
 bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
-  const OutputPlan plan = ComputeOutputPlan(symbols_, contract_, entry);
+  const OutputPlan plan =
+      ComputeOutputPlan(symbols_, contract_, entry, options_.profile == "designer");
   const std::vector<const ClassInfo*>& output_classes = plan.classes;
   const std::set<const Member*>& used_members = plan.members;
   used_members_ = &used_members;
@@ -837,17 +840,10 @@ bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
   for (const ClassInfo* klass : output_classes) {
     if (klass->forbid_output)
       continue;
-    emitted_classes.insert(klass);
-    const ClassOutput output = emitter_->EmitClass(*klass);
-    if (!WriteFile(MainPrefix() + SourceDir() + names_->ClassName(*klass) + ".java", output.text)) {
+    ClassOutput output;
+    if (!WriteClassFiles(klass, &output, &emitted_classes))
       return false;
-    }
     RecordLineMap(*klass, output);
-    for (const auto& auxiliary : emitter_->TakeAuxiliaryClasses()) {
-      if (!WriteFile(MainPrefix() + SourceDir() + auxiliary.first + ".java", auxiliary.second)) {
-        return false;
-      }
-    }
     resources_->ProcessClassAnnotations(*klass);
     if (klass->declaration == nullptr)
       continue;
@@ -867,31 +863,20 @@ bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
     }
   }
   const auto emit_extra_class = [&](const ClassInfo* klass) -> bool {
-    if (klass == nullptr || klass->declaration == nullptr || klass->forbid_output)
-      return true;
-    emitted_classes.insert(klass);
-    const ClassOutput output = emitter_->EmitClass(*klass);
-    if (!WriteFile(MainPrefix() + SourceDir() + names_->ClassName(*klass) + ".java", output.text)) {
-      return false;
-    }
-    for (const auto& auxiliary : emitter_->TakeAuxiliaryClasses()) {
-      if (!WriteFile(MainPrefix() + SourceDir() + auxiliary.first + ".java", auxiliary.second)) {
-        return false;
-      }
-    }
-    return true;
+    return WriteClassFiles(klass, nullptr, &emitted_classes);
   };
   bool generic_progress = true;
   int generic_loop_guard = 0;
   while (generic_progress) {
-    if (++generic_loop_guard > 500)
+    if (++generic_loop_guard > kMaxGenericExpansionRounds)
       break;
     generic_progress = false;
     const std::vector<JavaEmitter::GenericInstantiation> generics =
         emitter_->TakePendingGenericInstantiations();
     for (const JavaEmitter::GenericInstantiation& instantiation : generics) {
       const std::string text = emitter_->EmitGenericInstantiation(instantiation);
-      if (!WriteFile(MainPrefix() + SourceDir() + instantiation.output_name + ".java", text)) {
+      if (!WriteFile(MainPrefix() + SourceDir() + instantiation.output_name + kJavaSourceSuffix,
+                     text)) {
         return false;
       }
       generic_progress = true;
@@ -925,4 +910,4 @@ bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
   return written;
 }
 
-}  // namespace tiecodec
+}

@@ -13,10 +13,13 @@ const Member* FindMemberInChain(const SymbolTable& symbols, const ClassInfo& kla
 const Member* ResolveGlobalMethod(const SymbolTable& symbols, const ClassInfo& context,
                                   const std::string& name, const ClassInfo** owner);
 
-/// Looks up an implicitly referenced member of a @全局类 class.
 const Member* FindGlobalClassMember(const SymbolTable& symbols, const ClassInfo& context,
                                     const std::string& name, const ClassInfo** owner);
 
-}  // namespace tiecodec
+const ClassInfo* BaseClassOf(const SymbolTable& symbols, const ClassInfo& klass);
+
+bool DerivesFrom(const SymbolTable& symbols, const ClassInfo* derived, const ClassInfo* base);
+
+}
 
 #endif
