@@ -86,8 +86,8 @@ GeneratedProgram JavaLanguageBackend::Emit(const GenerationInput& input, Diagnos
     ClassOutput output = emitter.EmitClass(*klass);
     if (!add_source(class_name, std::move(output.text), std::move(output.line_refs), klass))
       return false;
-    for (const auto& auxiliary : emitter.TakeAuxiliaryClasses()) {
-      if (!add_source(auxiliary.first, auxiliary.second, {}, nullptr))
+    for (const AuxiliaryClass& auxiliary : emitter.TakeAuxiliaryClasses()) {
+      if (!add_source(auxiliary.name, auxiliary.text, auxiliary.line_refs, nullptr))
         return false;
     }
     return true;
@@ -116,7 +116,9 @@ GeneratedProgram JavaLanguageBackend::Emit(const GenerationInput& input, Diagnos
       }
       GeneratedSource source;
       source.file_name = instantiation.output_name + ".java";
-      source.content = emitter.EmitGenericInstantiation(instantiation);
+      ClassOutput generated = emitter.EmitGenericInstantiation(instantiation);
+      source.content = std::move(generated.text);
+      source.line_refs = std::move(generated.line_refs);
       result.sources.push_back(std::move(source));
       generic_progress = true;
     }

@@ -178,14 +178,18 @@ void Lexer::SkipWhitespaceAndComments() {
     if (c == '/' && PeekChar(1) == '*') {
       Advance();
       Advance();
+      bool closed = false;
       while (!AtEnd()) {
         if (Current() == '*' && PeekChar(1) == '/') {
           Advance();
           Advance();
+          closed = true;
           break;
         }
         Advance();
       }
+      if (!closed)
+        ReportError("未闭合的块注释");
       continue;
     }
     break;
@@ -254,7 +258,8 @@ Token Lexer::Lex() {
 
   const char c = Current();
 
-  if (c == '@' && source_.compare(offset_, 5, "@code") == 0) {
+  const bool at_line_start = at_line_start_;
+  if (c == '@' && at_line_start && source_.compare(offset_, 5, "@code") == 0) {
     const char next = PeekChar(5);
     if (next == '\0' || next == ' ' || next == '\t' || next == '\r' || next == '\n' ||
         next == '(') {
@@ -267,11 +272,12 @@ Token Lexer::Lex() {
   }
 
   if (IsIdentifierStart(Current()) && !IsAsciiDigit(Current())) {
-    if (begin_line == line_ && source_.compare(offset_, 4, "code") == 0) {
+    if (source_.compare(offset_, 4, "code") == 0) {
       const char next = PeekChar(4);
       const bool is_code_keyword =
           next == '\0' || next == ' ' || next == '\t' || next == '\r' || next == '\n';
-      if (is_code_keyword && source_.compare(offset_, 5, "code(") != 0) {
+      const char previous = offset_ > 0 ? source_[offset_ - 1] : '\0';
+      if (is_code_keyword && source_.compare(offset_, 5, "code(") != 0 && previous != '.') {
         Token token = MakeToken(TokenKind::kCodeBlock, begin_offset, begin_line, begin_column);
         token.raw = source_.substr(offset_, 4);
         for (int i = 0; i < 4; ++i)
@@ -510,15 +516,19 @@ Token Lexer::LexLongString() {
   Advance();
   Advance();
   std::string content;
+  bool closed = false;
   while (!AtEnd()) {
     if (Current() == ']' && PeekChar(1) == ']') {
       Advance();
       Advance();
+      closed = true;
       break;
     }
     content.push_back(Current());
     Advance();
   }
+  if (!closed)
+    ReportError("未闭合的长字符串（缺少 ']]'）");
   Token token = MakeToken(TokenKind::kLongString, begin, begin_line, begin_column);
   token.indent_level = start_indent;
   token.text = std::move(content);
@@ -550,23 +560,66 @@ Token Lexer::LexCodeBlock() {
   const std::size_t content_begin = offset_;
   std::size_t content_end = offset_;
   bool closed = false;
+  char quote = 0;
+  bool block_comment = false;
+  bool line_comment = false;
   while (!AtEnd()) {
-    std::size_t probe = offset_;
-    while (probe < source_.size() && (source_[probe] == ' ' || source_[probe] == '\t'))
-      ++probe;
-    if (source_.compare(probe, 4, "@end") == 0) {
-      const std::size_t after = probe + 4;
+    if (line_comment) {
+      if (Current() == '\n')
+        line_comment = false;
+      Advance();
+      continue;
+    }
+    if (block_comment) {
+      if (Current() == '*' && PeekChar(1) == '/') {
+        Advance();
+        Advance();
+        block_comment = false;
+      } else {
+        Advance();
+      }
+      continue;
+    }
+    if (quote != 0) {
+      if (Current() == '\\') {
+        Advance();
+        if (!AtEnd())
+          Advance();
+        continue;
+      }
+      if (Current() == quote)
+        quote = 0;
+      Advance();
+      continue;
+    }
+    if (at_line_start_ && Current() == '@' && source_.compare(offset_, 4, "@end") == 0) {
+      const std::size_t after = offset_ + 4;
       const bool boundary = after >= source_.size() || source_[after] == '\n' ||
                             source_[after] == ' ' || source_[after] == '\t' ||
                             source_[after] == '\r';
       if (boundary) {
-        content_end = offset_;
+        content_end = line_start_offset_;
         closed = true;
-
-        while (!AtEnd() && Current() != '\n')
-          Advance();
+        SkipRestOfLine();
         break;
       }
+    }
+    if (Current() == '/' && PeekChar(1) == '/') {
+      line_comment = true;
+      Advance();
+      Advance();
+      continue;
+    }
+    if (Current() == '/' && PeekChar(1) == '*') {
+      block_comment = true;
+      Advance();
+      Advance();
+      continue;
+    }
+    if (Current() == '"' || Current() == '\'') {
+      quote = Current();
+      Advance();
+      continue;
     }
     Advance();
   }

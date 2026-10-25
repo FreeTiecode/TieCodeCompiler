@@ -311,9 +311,8 @@ std::string JavaEmitter::InitializerExpression(const ClassInfo& klass,
     return EmitArrayLiteral(klass, value, types_.MapType(shape.base, &klass), shape.dimensions);
   }
   const bool direct_construction =
-      (value.kind == ExprKind::kNew && BaseTypeName(value.text) == BaseTypeName(declared_type)) ||
-      value.kind == ExprKind::kMulti;
-  if (!direct_construction) {
+      value.kind == ExprKind::kNew && BaseTypeName(value.text) == BaseTypeName(declared_type);
+  if (!direct_construction && value.kind != ExprKind::kMulti) {
     if (const Member* cast = FindImplicitCast(klass, declared_type, value)) {
       return EmitExpression(klass, value) + "." + names_.MemberName(*cast) + "()";
     }

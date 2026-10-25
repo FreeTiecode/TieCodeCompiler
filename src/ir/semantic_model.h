@@ -36,6 +36,7 @@ struct MemberFacts {
   bool force_use = false;
   bool is_virtual = false;
   bool hidden = false;
+  bool deprecated = false;
   std::string property_demand;
   bool async = false;
   bool async_independent_thread = false;

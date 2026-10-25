@@ -8,10 +8,10 @@ int ConsoleReporter::ReportCheck(const Diagnostics& diagnostics, std::size_t uni
   diagnostics.Flush(console_);
   const int failure_count = diagnostics.error_count() + diagnostics.fatal_count();
   if (failure_count > 0) {
-    std::cerr << "解析失败，存在 " << failure_count << " 个错误\n";
+    std::cerr << "检查失败，存在 " << failure_count << " 个错误\n";
     return 1;
   }
-  std::cout << "解析通过，共 " << unit_count << " 个源文件\n";
+  std::cout << "检查通过，共 " << unit_count << " 个源文件\n";
   return 0;
 }
 

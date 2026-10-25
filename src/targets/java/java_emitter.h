@@ -100,6 +100,12 @@ struct ClassOutput {
   std::vector<LineRef> line_refs;
 };
 
+struct AuxiliaryClass {
+  std::string name;
+  std::string text;
+  std::vector<LineRef> line_refs;
+};
+
 class JavaEmitter {
 public:
   JavaEmitter(const SymbolTable& symbols, const TargetConfig& config,
@@ -113,7 +119,7 @@ public:
 
   ClassOutput EmitClass(const ClassInfo& klass);
 
-  std::vector<std::pair<std::string, std::string>> TakeAuxiliaryClasses();
+  std::vector<AuxiliaryClass> TakeAuxiliaryClasses();
 
   void RunAnalysisLints();
   void RemoveUnusedLocalsAfterLint();
@@ -126,7 +132,7 @@ public:
 
   std::vector<GenericInstantiation> TakePendingGenericInstantiations();
 
-  std::string EmitGenericInstantiation(const GenericInstantiation& instantiation);
+  ClassOutput EmitGenericInstantiation(const GenericInstantiation& instantiation);
 
   bool IsGenericClass(const ClassInfo& klass) const;
 
@@ -217,6 +223,7 @@ private:
   std::string GenericArgumentOutputName(const std::string& argument, const ClassInfo& context);
   std::string MapGenericAwareType(const ClassInfo& klass, const std::string& type_name,
                                   bool record_imports, bool shell_only);
+  std::string ExpandGenericDefaults(const ClassInfo& klass, const std::string& type_name);
   void RecordSpecImport(const std::string& import_path);
   void RecordNeededClass(const ClassInfo* klass);
   void CollectGenericTypeImports(const ClassInfo& klass, const std::string& type_name,
@@ -295,8 +302,8 @@ private:
   std::vector<Parameter> lint_parameters_;
   std::string lint_return_type_;
   bool lint_returns_value_ = false;
-  std::vector<std::pair<std::string, std::string>> auxiliary_classes_;
-  std::vector<std::string> pending_async_machines_;
+  std::vector<AuxiliaryClass> auxiliary_classes_;
+  std::vector<EmittedText> pending_async_machines_;
   std::map<const Expr*, std::string> await_replacements_;
   std::set<std::string> reported_;
   std::set<const ClassInfo*> emitted_;

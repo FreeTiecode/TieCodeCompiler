@@ -55,7 +55,7 @@ FTC 的入口是 ``CompilationSession``\ ；CLI 只负责把选项转成 ``CliCo
      - 解析后打印 AST **摘要**\ （文件/包/类/成员/语句数量），不打印表达式树。
    * - ``--check``
      - 关
-     - 只做源加载 + 注解阶段；不建符号表、不 lint、不生成。
+     - 执行源加载、注解、符号、需求、lint/类型检查与语言后端生成，但不写文件；不执行平台清单/资源/Gradle 生成。
    * - ``--disable-ftc-features``
      - 关
      - 禁用 FTC 默认修正（兼容模式）：泛型/运算符/内联 code、map 键值遍历、负步长、对象下标交换、重复订阅、原始类型事件默认值相关代码会报错；输出路径安全始终启用。
@@ -165,7 +165,7 @@ FTC 默认启用与参考实现不同的修正：泛型特化使用合法 ``类�
    * - 2
      - 启动/配置错误：目标注册失败、目录扫描失败、源加载后无文件、命名模式非法、目标配置构建失败。
 
-注意：``--check``\ 的“通过”只表示源加载 + 注解阶段没有错误，不代表能生成可编译的 Java。CLI 参数错误（未知选项、缺少 ``-o``、没有源文件、未知目标）由 ``ParseCommandLine``\ 返回失败，退出码为 1。
+注意：``--check``\ 的“通过”表示源加载、注解、符号解析、需求、lint/类型检查与语言代码生成阶段没有错误；它不执行平台清单/资源/Gradle 生成，也不写文件。CLI 参数错误（未知选项、缺少 ``-o``、没有源文件、未知目标）由 ``ParseCommandLine``\ 返回失败，退出码为 1。
 
 诊断格式
 --------------------------------------------------------------------------------
@@ -214,8 +214,10 @@ JVM：
 
 .. code-block:: bash
 
-   ./build/tiecodec --check app.t
-   ./build/tiecodec --check --dump-ast app.t
+   ./build/tiecodec --platform android --check \
+       $(find stdlibs/安卓基本库/源代码 -name '*.t') app.t
+   ./build/tiecodec --platform android --check --dump-ast \
+       $(find stdlibs/安卓基本库/源代码 -name '*.t') app.t
 
 条件编译：
 

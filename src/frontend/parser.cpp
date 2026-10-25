@@ -360,49 +360,23 @@ bool Parser::ParseClass(ClassDecl* class_decl) {
   class_decl->position = name_token.position;
 
   if (MatchSymbol("<")) {
-    int depth = 1;
-    std::string current;
-    bool in_default = false;
-    while (!IsAtEnd() && depth > 0) {
-      const Token token = Peek();
-      if (token.kind == TokenKind::kSymbol && token.text == "<") {
-        ++depth;
+    while (!IsAtEnd() && !CheckSymbol(">")) {
+      if (Peek().kind != TokenKind::kIdentifier) {
         Next();
         continue;
       }
-      if (token.kind == TokenKind::kSymbol && token.text == ">") {
-        --depth;
-        Next();
-        if (depth == 0) {
-          if (!current.empty()) {
-            class_decl->generic_parameters.push_back(current);
-            class_decl->generic_parameter_defaults.push_back(in_default);
-          }
-          break;
-        }
-        continue;
-      }
-      if (depth == 1 && token.kind == TokenKind::kSymbol && token.text == ",") {
-        if (!current.empty()) {
-          class_decl->generic_parameters.push_back(current);
-          class_decl->generic_parameter_defaults.push_back(in_default);
-        }
-        current.clear();
-        in_default = false;
-        Next();
-        continue;
-      }
-      if (depth == 1 && token.kind == TokenKind::kSymbol && token.text == "=") {
-        in_default = true;
-        Next();
-        continue;
-      }
-      if (depth == 1 && !in_default &&
-          (token.kind == TokenKind::kIdentifier || token.kind == TokenKind::kString)) {
-        current += token.text;
-      }
-      Next();
+      const std::string parameter = Next().text;
+      std::string default_type;
+      const bool has_default = MatchSymbol("=");
+      if (has_default)
+        default_type = ParseTypeName();
+      class_decl->generic_parameters.push_back(parameter);
+      class_decl->generic_parameter_defaults.push_back(has_default);
+      class_decl->generic_parameter_default_types.push_back(default_type);
+      if (!MatchSymbol(","))
+        break;
     }
+    ExpectSymbol(">", "'>'");
   }
 
   if (MatchSymbol(":")) {
@@ -843,10 +817,6 @@ StmtPtr Parser::ParseIf() {
         !IsAtEnd() && !(Check("结束")) && Peek().position.line == else_position.line && !Check(";");
     if (Check("如果")) {
       statement->else_body.push_back(ParseIf());
-      if (Check("结束"))
-        statement->end_line = static_cast<int>(Peek().position.line) + 1;
-      Expect("结束", "'结束'");
-      Expect("如果", "'如果'");
       return statement;
     }
     if (same_line_condition) {

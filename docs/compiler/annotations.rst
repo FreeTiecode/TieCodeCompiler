@@ -112,7 +112,7 @@
      - 任意成员
      - Declare
      - 可选文本
-     - 记录 deprecated class fact；当前没有警告消费者。
+     - 记录 class/member deprecated fact；使用处产生 ``semantic.deprecated``\ 警告。
    * - ``@外部基础类``
      - 类
      - Declare
@@ -161,7 +161,7 @@ Java 注解（13）
      - 任意成员
      - Declare+Apply
      - 无
-     - 成员省略 ``public``\ ；类级记录 hidden 但类仍输出 ``public class``\ 。
+     - 成员省略 ``public``\ ；类级让类与泛型壳/特化类输出为包私有 ``class``\ 。
    * - ``@静态``
      - 变量/方法
      - Apply
@@ -372,9 +372,9 @@ Android 注解（23）
 
 只记录/部分消费的项：
 
-- ``@废弃使用``\ ：记录 deprecated，当前没有警告消费者；
+- ``@废弃使用``\ ：记录 deprecated；类/成员在使用处产生 ``semantic.deprecated``\ 警告；
 - ``@禁用指针``\ ：记录 ``disable_pointer``\ ，当前没有 emitter 消费者；
-- 类级 ``@隐藏``\ ：记录 hidden，但类始终输出 ``public class``\ ；
+- 类级 ``@隐藏``\ ：记录 hidden，类与泛型壳/特化类输出为包私有 ``class``\ ；
 - ``@输出名`` 成员级：必须是合法 Java 标识符；unit 级无 ``.``\ 时忽略；
 - ``@全局基础类``\ ：只做重复检查，不自动注入基类。
 

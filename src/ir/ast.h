@@ -177,6 +177,7 @@ struct ClassDecl {
   SourcePosition base_position;
   std::vector<std::string> generic_parameters;
   std::vector<bool> generic_parameter_defaults;
+  std::vector<std::string> generic_parameter_default_types;
   std::vector<Member> members;
   std::string file;
   SourcePosition position;

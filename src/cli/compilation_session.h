@@ -29,6 +29,7 @@ public:
 
 private:
   void RunAnnotationPhase();
+  int RunCheck();
   int PrepareTarget();
   bool RunPlanAndGenerate();
 

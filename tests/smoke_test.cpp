@@ -182,8 +182,8 @@ TEST_F(SmokeTest, CheckFailsForUnreadableSource) {
 
   EXPECT_NE(result.status, 0) << "读取失败时 --check 不应返回成功，日志:\n" << result.log;
   EXPECT_TRUE(Contains(result.log, "无法读取源文件")) << "日志缺少读取错误:\n" << result.log;
-  EXPECT_TRUE(Contains(result.log, "解析失败")) << "日志缺少失败提示:\n" << result.log;
-  EXPECT_FALSE(Contains(result.log, "解析通过")) << "--check 不应误报解析通过:\n" << result.log;
+  EXPECT_TRUE(Contains(result.log, "检查失败")) << "日志缺少失败提示:\n" << result.log;
+  EXPECT_FALSE(Contains(result.log, "检查通过")) << "--check 不应误报检查通过:\n" << result.log;
 }
 
 TEST_F(SmokeTest, RejectsPathTraversalOutputName) {
@@ -701,6 +701,41 @@ TEST_F(SmokeTest, DisablesFtcInlineSemicolon) {
   EXPECT_TRUE(Contains(result.log, "内联代码语句")) << result.log;
 }
 
+TEST_F(SmokeTest, SupportsElseIfWithSingleTerminator) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    如果 假\n"
+            "      调试输出(\"a\")\n"
+            "    否则 如果 真\n"
+            "      调试输出(\"b\")\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+}
+
+TEST_F(SmokeTest, RejectsDoubleElseIfTerminator) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    如果 假\n"
+            "      调试输出(\"a\")\n"
+            "    否则 如果 真\n"
+            "      调试输出(\"b\")\n"
+            "    结束 如果\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  EXPECT_NE(result.status, 0) << result.log;
+}
+
 TEST_F(SmokeTest, HandlesMapKeyValueForeach) {
   std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
   source << "类 启动窗口 : 窗口\n"
@@ -840,6 +875,281 @@ TEST_F(SmokeTest, ReportsUnclosedCodeBlock) {
   const ProcessResult result = RunCompiler();
   EXPECT_NE(result.status, 0) << result.log;
   EXPECT_TRUE(Contains(result.log, "未闭合的 code 块")) << result.log;
+}
+
+TEST_F(SmokeTest, EmitsHiddenClassWithoutPublicModifier) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "@隐藏\n"
+            "类 辅助\n"
+            "  变量 值: 文本 = \"x\"\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 对象: 辅助 = 创建 辅助\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    调试输出(对象.值)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "辅助.java");
+  EXPECT_TRUE(Contains(java, "class 辅助 {")) << java;
+  EXPECT_FALSE(Contains(java, "public class 辅助")) << java;
+}
+
+TEST_F(SmokeTest, ReportsDeprecatedMemberUsage) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 辅助\n"
+            "  @废弃使用(\"旧接口\")\n"
+            "  方法 旧方法(): 文本\n"
+            "    返回 \"x\"\n"
+            "  结束 方法\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 对象: 辅助 = 创建 辅助\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    调试输出(对象.旧方法())\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  EXPECT_TRUE(Contains(result.log, "已废弃")) << result.log;
+}
+
+TEST_F(SmokeTest, AppliesGenericParameterDefaults) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 容器<T = 文本>\n"
+            "  变量 值: T\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 项: 容器 = 创建 容器\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    调试输出(项.值)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const fs::path generated = workspace_ / "out" / "src" / "容器$文本.java";
+  ASSERT_TRUE(fs::is_regular_file(generated)) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "容器$文本")) << java;
+}
+
+TEST_F(SmokeTest, UsesAssignmentOperatorForMultiExpression) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 坐标\n"
+            "  变量 横坐标: 整数\n"
+            "  变量 纵坐标: 整数\n"
+            "  @静态\n"
+            "  @运算符重载\n"
+            "  方法 =(x: 整数, y: 整数): 坐标\n"
+            "    变量 结果: 坐标 = 创建 坐标\n"
+            "    结果.横坐标 = x\n"
+            "    结果.纵坐标 = y\n"
+            "    返回 结果\n"
+            "  结束 方法\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 点: 坐标 = (1, 2)\n"
+            "    调试输出(点.横坐标)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "坐标.operator_assign(1, 2)")) << java;
+}
+
+TEST_F(SmokeTest, CompilesAsyncCountLoopWithStep) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  @异步方法\n"
+            "  方法 加载()\n"
+            "    循环(i, 10, 0, -2)\n"
+            "      等待 取数据()\n"
+            "      调试输出(i)\n"
+            "    结束 循环\n"
+            "  结束 方法\n"
+            "  方法 取数据()\n"
+            "  结束 方法\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    加载()\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, " >= 0 ? ")) << java;
+  EXPECT_TRUE(Contains(java, " > 0)")) << java;
+}
+
+TEST_F(SmokeTest, CompilesAsyncForeachWithAwait) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  @异步方法\n"
+            "  方法 加载()\n"
+            "    变量 列表: 集合<文本> = 创建 集合<文本>\n"
+            "    循环(列表 -> 条目)\n"
+            "      等待 取数据()\n"
+            "      调试输出(条目)\n"
+            "    结束 循环\n"
+            "  结束 方法\n"
+            "  方法 取数据()\n"
+            "  结束 方法\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    加载()\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler({"--line-map", "out/map.tsm"});
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string context =
+      ReadFile(workspace_ / "out" / "src" / "启动窗口_加载_异步上下文.java");
+  EXPECT_TRUE(Contains(context, "java.util.Iterator<String>")) << context;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, ".hasNext()")) << java;
+  EXPECT_TRUE(Contains(java, ".next()")) << java;
+  ASSERT_TRUE(fs::is_regular_file(workspace_ / "out" / "map.tsm"));
+
+  const ProcessResult retrace =
+      SpawnCompiler({compiler_.string(), "--retrace", (workspace_ / "out" / "map.tsm").string(),
+                     "启动窗口_加载_异步上下文.java", "5"});
+  EXPECT_TRUE(Contains(retrace.log, "启动窗口.t:")) << retrace.log;
+}
+
+TEST_F(SmokeTest, RejectsBreakOutsideLoop) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    退出循环\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  EXPECT_NE(result.status, 0) << result.log;
+  EXPECT_TRUE(Contains(result.log, "只能在循环内部使用")) << result.log;
+}
+
+TEST_F(SmokeTest, RejectsPrimitiveInstanceof) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 值: 整数 = 1\n"
+            "    如果 值 属于 整数\n"
+            "      调试输出(\"整数\")\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  EXPECT_NE(result.status, 0) << result.log;
+  EXPECT_TRUE(Contains(result.log, "原始类型")) << result.log;
+}
+
+TEST_F(SmokeTest, IgnoresEndMarkerInsideCodeComment) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    @code\n"
+            "    /*\n"
+            "@end\n"
+            "    */\n"
+            "    int manual = 1;\n"
+            "    @end\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "int manual = 1;")) << java;
+}
+
+TEST_F(SmokeTest, TreatsDottedCodeIdentifierAsField) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 辅助\n"
+            "  变量 code: 文本 = \"x\"\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 对象: 辅助 = 创建 辅助\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 值: 文本 = 对象.code\n"
+            "    调试输出(值)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "对象.code")) << java;
+}
+
+TEST_F(SmokeTest, EmitsUntypedArrayLiteralAsObjectArray) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 值: 对象 = {1, 2, 3}\n"
+            "    调试输出(值)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "new Object[]{1, 2, 3}")) << java;
+}
+
+TEST_F(SmokeTest, ReportsUnclosedBlockCommentAndLongString) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  /* 未闭合\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult comment = RunCompiler();
+  EXPECT_NE(comment.status, 0) << comment.log;
+  EXPECT_TRUE(Contains(comment.log, "未闭合的块注释")) << comment.log;
+
+  source.open(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  变量 文本值: 文本 = [[未闭合\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult text = RunCompiler();
+  EXPECT_NE(text.status, 0) << text.log;
+  EXPECT_TRUE(Contains(text.log, "未闭合的长字符串")) << text.log;
+}
+
+TEST_F(SmokeTest, CheckRejectsUnresolvedGenericArgument) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 列表: 集合<不存在类型> = 创建 集合<不存在类型>\n"
+            "    调试输出(列表)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler({"--check"});
+  EXPECT_NE(result.status, 0) << result.log;
+  EXPECT_TRUE(Contains(result.log, "找不到类\"不存在类型\"")) << result.log;
 }
 
 }

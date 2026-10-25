@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 
 #include "internal/helpers.h"
@@ -18,6 +19,30 @@
 namespace tiecodec {
 
 using namespace detail;
+
+namespace {
+
+bool IsSideEffectFreeConstant(const Expr& expression) {
+  switch (expression.kind) {
+    case ExprKind::kLiteral:
+    case ExprKind::kNull:
+      return true;
+    case ExprKind::kParen:
+    case ExprKind::kUnary:
+    case ExprKind::kCast:
+      return expression.children.size() == 1 && expression.children[0] != nullptr &&
+             IsSideEffectFreeConstant(*expression.children[0]);
+    case ExprKind::kBinary:
+      return expression.children.size() == 2 && expression.children[0] != nullptr &&
+             expression.children[1] != nullptr &&
+             IsSideEffectFreeConstant(*expression.children[0]) &&
+             IsSideEffectFreeConstant(*expression.children[1]);
+    default:
+      return false;
+  }
+}
+
+}
 std::string JavaEmitter::MemberTypeOf(const ClassInfo& klass, const std::string& name) const {
   const ClassInfo* current = &klass;
   const std::size_t max_depth = symbols_.class_count() + 1;
@@ -224,7 +249,8 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
       if (klass.declaration != nullptr) {
         for (const Member& member : klass.declaration->members) {
           if (member.kind == MemberKind::kConstant && member.name == expression.text &&
-              member.expression_body != nullptr) {
+              member.expression_body != nullptr &&
+              IsSideEffectFreeConstant(*member.expression_body)) {
             return EmitExpression(klass, *member.expression_body);
           }
         }
@@ -470,15 +496,35 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
              ")";
     }
     case ExprKind::kArrayLiteral: {
-      std::string result = "{";
-      for (std::size_t i = 0; i < expression.children.size(); ++i) {
-        if (i > 0)
-          result += ", ";
-        if (expression.children[i] != nullptr)
-          result += EmitExpression(klass, *expression.children[i]);
-      }
-      result += "}";
-      return result;
+      std::function<int(const Expr&)> depth_of = [&](const Expr& value) {
+        int depth = 1;
+        for (const ExprPtr& child : value.children) {
+          if (child != nullptr && child->kind == ExprKind::kArrayLiteral)
+            depth = std::max(depth, 1 + depth_of(*child));
+        }
+        return depth;
+      };
+      const int depth = depth_of(expression);
+      std::function<std::string(const Expr&, int)> emit = [&](const Expr& value, int level) {
+        std::string result = "new Object";
+        for (int i = 0; i < level; ++i)
+          result += "[]";
+        result += "{";
+        for (std::size_t i = 0; i < value.children.size(); ++i) {
+          if (i > 0)
+            result += ", ";
+          const Expr* child = value.children[i].get();
+          if (child == nullptr)
+            continue;
+          if (child->kind == ExprKind::kArrayLiteral && level > 1)
+            result += emit(*child, level - 1);
+          else
+            result += EmitExpression(klass, *child);
+        }
+        result += "}";
+        return result;
+      };
+      return emit(expression, depth);
     }
     case ExprKind::kAssign: {
       if (expression.children.size() < 2 || expression.children[0] == nullptr ||

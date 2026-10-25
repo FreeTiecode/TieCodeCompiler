@@ -88,7 +88,7 @@ Pass 管线
 5. **Declare 注解**\ ：``DeclareAnnotations``\ 。只执行元数据阶段含 ``kDeclare``\ 的处理器，写入 ``SemanticModel``\ 的 Unit/Class/Member facts。此阶段发生在符号表建立之前，因此 **不能解析类型/成员**\ 。
 6. **禁止创建校验**\ ：``ValidateForbiddenCreation``\ 。检查没有初始化器且类型带 ``@禁止创建对象``\ 的变量/字段。
 
-``--check``\ ：在 ``RunAnnotationPhase``\ 之后直接 ``return reporter_.ReportCheck(...)``\ 。它 **不**\ 构建符号表、不做类型检查/lint、不生成产物。``--check``\ 通过不等于代码可编译。
+``--check``\ ：在 ``RunAnnotationPhase`` 之后继续执行 ``PrepareTarget``\ （符号表、需求校验、目标配置）、Apply 注解/需求、输出计划与语言后端 ``Emit``\ ，但不调用平台 ``Generate``\ ，也不写任何文件。它覆盖符号解析、需求、lint、类型检查与 Java 代码生成阶段的诊断；不覆盖清单/资源/Gradle 等平台工程细节。``--check``\ 通过仍不等于平台产物可构建。
 
 阶段 2：目标准备
 --------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ Pass 管线
 
 - ``--line-map``\ ：``BuildSourceMapping``\ 从 ``GeneratedSource::line_refs``\ 构建 TSM 表；Android 在 ``WriteProjectFiles``\ 写出，JVM 在 ``WriteLineMap``\ 写出。
 - ``--retrace``/``--retrace-batch``\ ：``src/cli/retrace.cpp``\ 读取 TSM 还原堆栈。
-- 行号表覆盖主类；异步上下文类与泛型特化文件通常没有行号引用。
+- 主类、异步上下文与泛型特化文件都写入 ``line_refs``\ ；异步状态机行映射到异步方法声明行。
 
 阶段契约
 --------------------------------------------------------------------------------
@@ -252,7 +252,7 @@ Pass 管线
    * - 键
      - 阶段/含义
    * - ``lexer.error``
-     - 词法：全角标点、未闭合字符串/字符/code 块、无法识别字符。
+     - 词法：全角标点、未闭合字符串/字符/code 块/块注释/长字符串、无法识别字符。
    * - ``parse.error``/ ``parse.*``
      - 语法、注解级别/参数、条件语法、外部基类等。
    * - ``enter.duplicated-class``

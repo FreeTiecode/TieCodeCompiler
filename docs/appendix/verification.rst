@@ -10,14 +10,16 @@
 文档构建
 --------------------------------------------------------------------------------
 
-安装依赖（当前 ``.venv``\ 已具备 Sphinx 9.2.0；RTD 主题需要 ``docutils<0.23``\ ）：
+首次使用先创建 ``.venv`` 并安装 ``docs/requirements.txt`` 中的依赖：
 
 .. code-block:: bash
 
-   .venv/bin/python -m pip install -i https://pypi.org/simple \
-       sphinx==9.2.0 sphinx-rtd-theme==3.1.0 docutils==0.22.4 jieba==0.42.1
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -i https://pypi.org/simple -r docs/requirements.txt
    .venv/bin/python -m pip check
    .venv/bin/sphinx-build --version
+
+如果 ``.venv`` 已存在，跳过 ``python3 -m venv``，直接安装/更新依赖即可。
 
 构建 HTML（警告视为错误）：
 
@@ -192,10 +194,12 @@ Android 端到端样例
 
 .. code-block:: bash
 
-   ./build/tiecodec --check "$tmp/app.t"
-   ./build/tiecodec --check --dump-ast "$tmp/app.t"
+   ./build/tiecodec --platform android --check \
+       $(find stdlibs/安卓基本库/源代码 -name '*.t') "$tmp/app.t"
+   ./build/tiecodec --platform android --check --dump-ast \
+       $(find stdlibs/安卓基本库/源代码 -name '*.t') "$tmp/app.t"
 
-``--check``\ 不产生输出目录；``--dump-ast``\ 只打印摘要。
+``--check``\ 不产生输出目录，但会执行符号、需求、lint/类型检查与语言代码生成；因此必须同时传入目标标准库。``--dump-ast``\ 只打印摘要。
 
 负面样例
 --------------------------------------------------------------------------------
@@ -210,8 +214,8 @@ Android 端到端样例
    * - 场景
      - 期望
      - 检查点
-   * - ``否则 如果``
-     - 单终止符报错
+   * - 重复 ``结束 如果``
+     - 额外终止符报错
      - 编译诊断。
    * - ``@编译条件``\ 放 unit
      - 注解级别错误
@@ -219,19 +223,25 @@ Android 端到端样例
    * - 双套 ``集合``
      - 简单名歧义，标准库内部可能先报错
      - 编译诊断。
-   * - 未解析类型
-     - 原样透传
-     - 生成 Java 文本。
-   * - 异步 foreach
-     - 循环体内等待未状态化
-     - 生成 Java 文本。
+   * - 未解析类型/泛型实参
+     - ``semantic.type.unresolved``\ 报错，不写产物
+     - 编译诊断。
+   * - 循环外 ``退出循环``/``跳过循环``
+     - 报错
+     - 编译诊断。
+   * - 原始类型 ``属于``
+     - 报错
+     - 编译诊断。
+   * - 未闭合块注释/长字符串
+     - 报错
+     - 编译诊断。
 
 回归与兼容开关测试
 ------------------
 
 .. code-block:: bash
 
-   ctest --test-dir build --output-on-failure -R 'SmokeTest\.(InitializesLocalVariablesLikeFields|NoArgForcedOutputKeepsClass|ForcedTrueKeepsClassMembers|SupportsAnnotatedPropertyAccessors|ReadsOctalIntegerLiteral|DispatchesExternalTextEquality|DispatchesExternalTextContains|FoldsIntegerOverflowAsInt32|AcceptsHexLongLiteral|RejectsDecimalLongLiteral|UsesJavaArrayLength|CompilesAsyncConditionAndSwitch|HandlesMapKeyValueForeach|SupportsNegativeCountStep|SwapsObjectIndexers|DeduplicatesSubscriptions|EmitsPrimitiveEventDefaults|RejectsInvalidMemberOutputName|DisablesFtcGenericFeatures|DisablesFtcOperatorFeatures|DisablesFtcInlineSemicolon|DisablesFtcNegativeStep|DisablesFtcDuplicateSubscriptions|DisablesFtcPrimitiveEventDefault)'
+   ctest --test-dir build --output-on-failure -R 'SmokeTest\.(InitializesLocalVariablesLikeFields|SupportsElseIfWithSingleTerminator|RejectsDoubleElseIfTerminator|NoArgForcedOutputKeepsClass|ForcedTrueKeepsClassMembers|SupportsAnnotatedPropertyAccessors|ReadsOctalIntegerLiteral|DispatchesExternalTextEquality|DispatchesExternalTextContains|FoldsIntegerOverflowAsInt32|AcceptsHexLongLiteral|RejectsDecimalLongLiteral|UsesJavaArrayLength|CompilesAsyncConditionAndSwitch|CompilesAsyncCountLoopWithStep|CompilesAsyncForeachWithAwait|HandlesMapKeyValueForeach|SupportsNegativeCountStep|SwapsObjectIndexers|DeduplicatesSubscriptions|EmitsPrimitiveEventDefaults|RejectsInvalidMemberOutputName|EmitsHiddenClassWithoutPublicModifier|ReportsDeprecatedMemberUsage|AppliesGenericParameterDefaults|UsesAssignmentOperatorForMultiExpression|RejectsBreakOutsideLoop|RejectsPrimitiveInstanceof|IgnoresEndMarkerInsideCodeComment|TreatsDottedCodeIdentifierAsField|EmitsUntypedArrayLiteralAsObjectArray|ReportsUnclosedBlockCommentAndLongString|CheckRejectsUnresolvedGenericArgument|DisablesFtcGenericFeatures|DisablesFtcOperatorFeatures|DisablesFtcInlineSemicolon|DisablesFtcNegativeStep|DisablesFtcDuplicateSubscriptions|DisablesFtcPrimitiveEventDefault)'
 
 默认模式下上述测试应全部通过；`--disable-ftc-features` 的测试应确认泛型、运算符重载、内联 code 分号、map 键值遍历、负步长、对象下标交换、重复订阅和原始类型事件默认值相关代码会显式报错。兼容开关说明见 :doc:`divergences` 的“FTC 默认修正与兼容开关”。
 

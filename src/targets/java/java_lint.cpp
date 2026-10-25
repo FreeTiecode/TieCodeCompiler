@@ -101,6 +101,11 @@ std::string PrimitiveNameOf(const ClassInfo& info) {
   return info.ExternalType("java");
 }
 
+bool IsJavaPrimitiveName(const std::string& name) {
+  return name == "byte" || name == "short" || name == "int" || name == "long" || name == "char" ||
+         name == "float" || name == "double" || name == "boolean" || name == "void";
+}
+
 std::string BaseTypeName(const std::string& type_name) {
   std::string base = type_name;
   if (!base.empty() && base.back() == '?')
@@ -581,8 +586,11 @@ void JavaEmitter::RunAnalysisLints() {
       return;
     }
   }
-  const auto check_type = [this](const ClassInfo& klass, const std::string& type_name,
-                                 const SourcePosition& position) {
+  std::set<std::string> reported_deprecated_classes;
+  std::function<void(const ClassInfo&, const std::string&, const SourcePosition&)> check_type;
+  check_type = [this, &reported_deprecated_classes, &check_type](const ClassInfo& klass,
+                                                                 const std::string& type_name,
+                                                                 const SourcePosition& position) {
     if (klass.declaration == nullptr)
       return;
     const std::string base = BaseResolvableName(type_name);
@@ -602,8 +610,32 @@ void JavaEmitter::RunAnalysisLints() {
                          "semantic.type.unresolved");
       return;
     }
+    {
+      std::string generic_base;
+      std::vector<std::string> generic_arguments;
+      if (SplitGenericType(type_name, &generic_base, &generic_arguments)) {
+        for (const std::string& argument : generic_arguments)
+          check_type(klass, argument, position);
+      }
+    }
     if (resolved->declaration == nullptr)
       return;
+    if (resolved != &klass && resolved->deprecated &&
+        reported_deprecated_classes.insert(resolved->qualified_name).second &&
+        !LintDisabled("semantic.deprecated")) {
+      diagnostics_.Warning(klass.declaration->file, position,
+                           "类\"" + resolved->declaration->name + "\"已废弃",
+                           "semantic.deprecated");
+    }
+    const std::string& resolved_package =
+        resolved->output_package.empty() ? resolved->package_name : resolved->output_package;
+    const std::string& context_package =
+        klass.output_package.empty() ? klass.package_name : klass.output_package;
+    if (resolved != &klass && resolved->hidden && resolved_package != context_package) {
+      diagnostics_.Error(klass.declaration->file, position,
+                         "类\"" + resolved->declaration->name + "\"是隐藏的，不能跨包使用",
+                         "semantic.class.hidden");
+    }
     const std::vector<std::string>& parameters = resolved->declaration->generic_parameters;
     const std::vector<bool>& defaults = resolved->declaration->generic_parameter_defaults;
     const std::size_t open = type_name.find('<');
@@ -686,7 +718,6 @@ void JavaEmitter::RunAnalysisLints() {
           diagnostics_.Error(klass.declaration->file, member.name_position,
                              "异步方法不能有返回值类型", "semantic.async.return-type");
         }
-        continue;
       }
       AnalyzeMember(klass, member);
     }
@@ -698,6 +729,7 @@ void JavaEmitter::RunAnalysisLints() {
 void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   if (klass.declaration == nullptr)
     return;
+  const bool async_member = IsAsyncMember(member);
   const std::string file = klass.declaration->file;
   const auto warn = [this, &file](const SourcePosition& position, const std::string& message,
                                   const std::string& key) {
@@ -731,8 +763,9 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       return false;
     return target_category != source_category;
   };
-  const auto check_type = [this, &klass, &error](const std::string& type_name,
-                                                 const SourcePosition& position) {
+  std::function<void(const std::string&, const SourcePosition&)> check_type;
+  check_type = [this, &klass, &error, &warn, &check_type](const std::string& type_name,
+                                                          const SourcePosition& position) {
     if (klass.declaration == nullptr)
       return;
     const std::string base = BaseResolvableName(type_name);
@@ -746,9 +779,25 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       if (generic == base)
         return;
     }
-    if (symbols_.Resolve(base, &klass) != nullptr)
+    const ClassInfo* resolved = symbols_.Resolve(base, &klass);
+    if (resolved == nullptr) {
+      error(position, "找不到类\"" + base + "\"");
       return;
-    error(position, "找不到类\"" + base + "\"");
+    }
+    {
+      std::string generic_base;
+      std::vector<std::string> generic_arguments;
+      if (SplitGenericType(type_name, &generic_base, &generic_arguments)) {
+        for (const std::string& argument : generic_arguments)
+          check_type(argument, position);
+      }
+    }
+    if (resolved != &klass && resolved->deprecated) {
+      warn(position,
+           "类\"" + (resolved->declaration != nullptr ? resolved->declaration->name : base) +
+               "\"已废弃",
+           "semantic.deprecated");
+    }
   };
 
   const auto member_has_annotation = [&](const std::string& name) {
@@ -849,6 +898,7 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
 
   std::set<std::string> reported_static;
   std::set<std::string> reported_hidden;
+  std::set<std::string> reported_deprecated;
   const auto class_derives_from = [this](const ClassInfo& klass, const ClassInfo* base) {
     return DerivesFrom(symbols_, &klass, base);
   };
@@ -866,6 +916,19 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
     if (!reported_hidden.insert(dedupe).second)
       return;
     error(position, "成员\"" + member.name + "\"是隐藏的，只能在成员所处类中进行访问");
+  };
+  const auto check_deprecated = [&](const Member& member, const ClassInfo* owner,
+                                    const SourcePosition& position) {
+    const MemberFacts* facts = semantics_.FindMember(&member);
+    if (facts == nullptr || !facts->deprecated)
+      return;
+    if (owner == &klass)
+      return;
+    const std::string dedupe =
+        std::to_string(position.line) + ":" + std::to_string(position.column) + ":" + member.name;
+    if (!reported_deprecated.insert(dedupe).second)
+      return;
+    warn(position, "成员\"" + member.name + "\"已废弃", "semantic.deprecated");
   };
   const auto check_call_arguments = [&](const ClassInfo& declaration_site, const Expr& call,
                                         const Expr& callee) {
@@ -934,6 +997,7 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       if (const Member* member_ptr = ResolveCalledMember(klass, *expression->children[0], &owner)) {
         check_call_arguments(klass, *expression, *expression->children[0]);
         check_hidden(*member_ptr, owner, ExpressionStart(*expression->children[0]), true);
+        check_deprecated(*member_ptr, owner, ExpressionStart(*expression->children[0]));
       }
     }
     if (expression->kind == ExprKind::kCall && !expression->children.empty() &&
@@ -956,6 +1020,7 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
                                      member_ptr->kind == MemberKind::kPropertyRead ||
                                      member_ptr->kind == MemberKind::kPropertyWrite;
             check_hidden(*member_ptr, owner, ExpressionStart(receiver), method_like);
+            check_deprecated(*member_ptr, owner, ExpressionStart(receiver));
             if (HasStaticAnnotation(*member_ptr)) {
               const std::string dedupe = std::to_string(callee.member_position.line) + ":" +
                                          std::to_string(callee.member_position.column) + ":" +
@@ -986,6 +1051,7 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
             const bool method_like = member_ptr->kind != MemberKind::kVariable &&
                                      member_ptr->kind != MemberKind::kConstant;
             check_hidden(*member_ptr, owner, ExpressionStart(*expression), method_like);
+            check_deprecated(*member_ptr, owner, ExpressionStart(*expression));
             if (HasStaticAnnotation(*member_ptr)) {
               const std::string dedupe = std::to_string(expression->member_position.line) + ":" +
                                          std::to_string(expression->member_position.column) + ":" +
@@ -1036,34 +1102,45 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       check_special_expressions(child.get(), true);
     }
     if (expression->kind == ExprKind::kAwait) {
-      if (!await_reported) {
+      if (!async_member && !await_reported) {
         await_reported = true;
         error(member.name_position, "'等待'只能在异步方法方法体中使用");
         invalid_expressions.insert(expression);
       }
     }
   };
-  std::function<void(const std::vector<StmtPtr>&)> check_special_statements;
-  check_special_statements = [&](const std::vector<StmtPtr>& statements) {
+  std::function<void(const std::vector<StmtPtr>&, int)> check_special_statements;
+  check_special_statements = [&](const std::vector<StmtPtr>& statements, int loop_depth) {
     for (const StmtPtr& statement : statements) {
       if (statement == nullptr)
         continue;
+      if ((statement->kind == StmtKind::kBreak || statement->kind == StmtKind::kContinue) &&
+          loop_depth == 0) {
+        error(statement->position, statement->kind == StmtKind::kBreak
+                                       ? "'退出循环'只能在循环内部使用"
+                                       : "'跳过循环'只能在循环内部使用");
+      }
       const bool statement_root = statement->kind == StmtKind::kExpression;
       check_special_expressions(statement->expr.get(), !statement_root);
       check_special_expressions(statement->loop_begin.get(), true);
       check_special_expressions(statement->loop_end.get(), true);
       check_special_expressions(statement->loop_step.get(), true);
+      const int nested_depth = statement->kind == StmtKind::kLoopCount ||
+                                       statement->kind == StmtKind::kLoopForeach ||
+                                       statement->kind == StmtKind::kLoopWhile
+                                   ? loop_depth + 1
+                                   : loop_depth;
       for (const SwitchCase& switch_case : statement->cases) {
         for (const ExprPtr& value : switch_case.values) {
           check_special_expressions(value.get(), true);
         }
-        check_special_statements(switch_case.body);
+        check_special_statements(switch_case.body, nested_depth);
       }
-      check_special_statements(statement->body);
-      check_special_statements(statement->else_body);
+      check_special_statements(statement->body, nested_depth);
+      check_special_statements(statement->else_body, nested_depth);
     }
   };
-  check_special_statements(member.body);
+  check_special_statements(member.body, 0);
   if (member.expression_body != nullptr) {
     check_special_expressions(member.expression_body.get(), true);
   }
@@ -1330,6 +1407,14 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
               source_type = "无类型";
             error(ExpressionStart(*expression->children[0]),
                   "类型\"" + source_type + "\"无法强制转换为类型\"无类型\"");
+          }
+        } else if (expression->kind == ExprKind::kIsType &&
+                   expression->text.find(kOperatorIndex) == std::string::npos) {
+          const ClassInfo* resolved = symbols_.Resolve(type_text, &klass);
+          if (resolved != nullptr && IsJavaPrimitiveName(resolved->ExternalType("java"))) {
+            error(expression->type_position,
+                  "类型\"" + type_text + "\"是原始类型，不能用于\"属于\"判断");
+            invalid_expressions.insert(expression);
           }
         }
         for (const ExprPtr& child : expression->children) {

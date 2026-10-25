@@ -313,6 +313,7 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      SourcePosition base_position;
      std::vector<std::string> generic_parameters;
      std::vector<bool> generic_parameter_defaults;
+     std::vector<std::string> generic_parameter_default_types;
      std::vector<Member> members;
      std::string file;
      SourcePosition position;  // 类名 Token
@@ -421,6 +422,7 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      bool force_use = false;
      bool is_virtual = false;
      bool hidden = false;
+     bool deprecated = false;
      std::string property_demand;
      bool async = false;
      bool async_independent_thread = false;
@@ -428,8 +430,8 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
 
 消费情况（重要）：
 
-- 被发射器消费：``output_name``\ 、``hidden``\ 、``async``\ 、``async_independent_thread``\ 、``external_types``\ 、``property_demand``\ 、``end_ref_line``\ 等。
-- 只记录/部分消费：``deprecated``\ 、``disable_pointer``\ 、类级 ``hidden``\ 、``force_use``\ （通常由 Apply 阶段的 ``ForceMember``\ 替代）、``global_base``\ （只做重复检查，不做隐式基类注入）。
+- 被发射器消费：``output_name``\ 、``hidden``\ 、``deprecated``\ 、``async``\ 、``async_independent_thread``\ 、``external_types``\ 、``property_demand``\ 、``end_ref_line`` 等。
+- 只记录/部分消费：``disable_pointer``\ 、``force_use``\ （通常由 Apply 阶段的 ``ForceMember`` 替代）、``global_base``\ （只做重复检查，不做隐式基类注入）。
 - ``@禁止继承``\ 的检查由 lint 直接读 AST 注解，不读 facts。
 
 效果与计划
@@ -469,7 +471,7 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
 - 调用实参允许 ``nullptr``\ 空洞；后端必须检查空指针。
 - ``Expr``\ 没有类型/符号/父指针；需要时用边表/遍历上下文。
 - ``code_text``\ 是原始文本，可能包含任意 Java，包括不合法 Java。
-- ``ClassDecl::generic_parameter_defaults``\ 只记录“是否有默认值”，不保留默认表达式。
+- ``ClassDecl::generic_parameter_default_types``\ 保存默认类型文本；使用处会补齐默认实参。
 - ``StmtKind::kBlock``\ 不由 parser 生成；不要假设所有语句都有非空 ``body``\ 。
 - ``Member::expression_body``\ 与 ``body``\ 可以同时为空（``= ...``\ ）；``code_text``\ 是第三种体。
 

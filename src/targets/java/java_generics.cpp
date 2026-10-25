@@ -236,11 +236,56 @@ std::string JavaEmitter::GenericTypeOutputName(const ClassInfo& base_class,
   return name;
 }
 
+std::string JavaEmitter::ExpandGenericDefaults(const ClassInfo& klass,
+                                               const std::string& type_name) {
+  std::string text = TrimTypeText(type_name);
+  int dimensions = 0;
+  while (EndsWith(text, kOperatorIndex)) {
+    text = TrimTypeText(text.substr(0, text.size() - 2));
+    ++dimensions;
+  }
+  bool nullable = false;
+  while (!text.empty() && text.back() == '?') {
+    text.pop_back();
+    nullable = true;
+  }
+  std::string base_name;
+  std::vector<std::string> arguments;
+  const bool has_arguments = SplitGenericType(text, &base_name, &arguments);
+  if (!has_arguments)
+    base_name = text;
+  const ClassInfo* base_class = symbols_.Resolve(base_name, &klass);
+  if (base_class == nullptr || base_class->declaration == nullptr)
+    return type_name;
+  const std::vector<std::string>& parameters = base_class->declaration->generic_parameters;
+  if (parameters.empty() || arguments.size() >= parameters.size())
+    return type_name;
+  const std::vector<std::string>& defaults =
+      base_class->declaration->generic_parameter_default_types;
+  for (std::size_t i = arguments.size(); i < parameters.size(); ++i) {
+    if (i >= defaults.size() || defaults[i].empty())
+      return type_name;
+    arguments.push_back(SubstituteTypeParameters(defaults[i], parameters, arguments));
+  }
+  std::string result = base_name + "<";
+  for (std::size_t i = 0; i < arguments.size(); ++i) {
+    if (i > 0)
+      result += ", ";
+    result += arguments[i];
+  }
+  result += ">";
+  for (int i = 0; i < dimensions; ++i)
+    result += kOperatorIndex;
+  if (nullable)
+    result += "?";
+  return result;
+}
+
 std::string JavaEmitter::MapGenericAwareType(const ClassInfo& klass, const std::string& type_name,
                                              bool record_imports, bool shell_only) {
   const bool previous = record_imports_for_spec_;
   record_imports_for_spec_ = record_imports && spec_imports_ != nullptr;
-  std::string text = TrimTypeText(type_name);
+  std::string text = TrimTypeText(ExpandGenericDefaults(klass, type_name));
   int dimensions = 0;
   while (EndsWith(text, kOperatorIndex)) {
     text = TrimTypeText(text.substr(0, text.size() - 2));
@@ -315,8 +360,8 @@ std::string JavaEmitter::JavaTypeOf(const ClassInfo& klass, const std::string& t
 
 void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::string& type_name,
                                             std::set<std::string>* imports, bool base_only) {
-  std::string text = SubstituteGenericType(type_name);
-  text = TrimTypeText(text);
+  std::string text = TrimTypeText(SubstituteGenericType(type_name));
+  text = TrimTypeText(ExpandGenericDefaults(klass, text));
   while (EndsWith(text, kOperatorIndex)) {
     text = TrimTypeText(text.substr(0, text.size() - 2));
   }
@@ -382,7 +427,7 @@ std::string JavaEmitter::SpecializedOwnerName(const ClassInfo& context, const Cl
                                               const std::string& receiver_type_text) {
   if (owner.declaration == nullptr || owner.declaration->generic_parameters.empty())
     return {};
-  std::string text = TrimTypeText(receiver_type_text);
+  std::string text = TrimTypeText(ExpandGenericDefaults(context, receiver_type_text));
   while (!text.empty() && text.back() == '?')
     text.pop_back();
   while (EndsWith(text, kOperatorIndex))
@@ -443,7 +488,7 @@ std::string JavaEmitter::OwnerCallName(const ClassInfo& context, const ClassInfo
   return specialization;
 }
 
-std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& instantiation) {
+ClassOutput JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& instantiation) {
   const ClassInfo& base = *instantiation.base;
   const ClassInfo* saved_base = spec_base_;
   std::vector<std::string> saved_arguments = spec_arguments_;
@@ -511,18 +556,25 @@ std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& in
   if (!resource_namespace.empty())
     imports.insert(resource_namespace + ".R");
 
-  std::string text = "package " + names_.Package(base) + ";\n\n";
+  EmittedText text;
+  text.Mark(current_file_, class_line);
+  text += "package " + names_.Package(base) + ";\n\n";
   for (const std::string& import : imports)
     text += "import " + import + ";\n";
   if (imports.size() > 1)
     text += "\n";
-  text += "public class " + instantiation.output_name;
+  text += (base.hidden ? "class " : "public class ") + instantiation.output_name;
   if (!extends_text.empty())
     text += " extends " + extends_text;
   text += " {\n";
-  text += body;
+  text.AppendText(body);
+  text.Mark(current_file_, base.end_ref_line > 0 ? base.end_ref_line : class_line);
   text += "}";
-  return text;
+  text.Finish();
+  ClassOutput output;
+  output.text = text;
+  output.line_refs = text.line_refs();
+  return output;
 }
 
 }

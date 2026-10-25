@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "constants.h"
+#include "internal/helpers.h"
 #include "java_effect_types.h"
 #include "java_emitter.h"
 #include "java_names.h"
@@ -21,6 +22,7 @@ struct AsyncField {
   std::string java_type;
   std::string source_type;
   bool scheduler = false;
+  LineRef ref;
 };
 
 enum class AsyncThread {
@@ -34,6 +36,17 @@ struct AsyncState {
   AsyncThread thread = AsyncThread::kGlobal;
   std::string body;
   std::vector<int> jump_priority;
+  LineRef ref;
+};
+
+struct ForeachContext {
+  std::string iterator;
+  std::string entry;
+  std::string key;
+  std::string value;
+  std::string key_type;
+  std::string value_type;
+  bool map = false;
 };
 
 AsyncState* FindState(std::vector<AsyncState>* states, int id) {
@@ -121,8 +134,8 @@ std::string JavaEmitter::AsyncStateMethodName(const ClassInfo& klass, const Memb
   return names_.AsyncMethodName(member);
 }
 
-std::vector<std::pair<std::string, std::string>> JavaEmitter::TakeAuxiliaryClasses() {
-  std::vector<std::pair<std::string, std::string>> result;
+std::vector<AuxiliaryClass> JavaEmitter::TakeAuxiliaryClasses() {
+  std::vector<AuxiliaryClass> result;
   result.swap(auxiliary_classes_);
   return result;
 }
@@ -134,6 +147,20 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   const bool is_static = modifiers != nullptr && modifiers->is_static;
   const MemberFacts* facts = semantics_.FindMember(&member);
   const bool independent = facts != nullptr && facts->async_independent_thread;
+  const std::string source_file =
+      klass.declaration != nullptr ? klass.declaration->file : std::string();
+  const int member_line = static_cast<int>(member.position.line) + 1;
+  const LineRef member_ref{source_file, member_line};
+  const auto line_ref = [&source_file](const SourcePosition& position) {
+    return LineRef{source_file, static_cast<int>(position.line) + 1};
+  };
+  const auto report_unsupported = [&](const Stmt& statement, const std::string& message,
+                                      const std::string& key) {
+    const std::string dedupe = key + "|" + message + "|" + source_file;
+    if (!reported_.insert(dedupe).second)
+      return;
+    diagnostics_.Error(source_file, statement.position, message, key);
+  };
 
   const auto java_type_of = [this, &klass](const std::string& type_name) {
     return type_name.empty() ? std::string("Object") : JavaTypeOf(klass, type_name);
@@ -142,6 +169,8 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   std::vector<AsyncField> fields;
   std::map<const Expr*, std::string> await_temps;
   std::map<const Stmt*, std::string> loop_counters;
+  std::map<const Stmt*, std::string> loop_steps;
+  std::map<const Stmt*, ForeachContext> foreach_contexts;
   std::string scheduler_field;
 
   if (independent) {
@@ -151,6 +180,7 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
     scheduler.source_type = kAsyncSchedulerName;
     scheduler.scheduler = true;
     scheduler_field = scheduler.name;
+    scheduler.ref = member_ref;
     fields.push_back(scheduler);
   }
 
@@ -161,6 +191,7 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
       AsyncField field;
       field.name = names_.GeneratedName("rn_", ++generated_name_counter_);
       field.java_type = "Object";
+      field.ref = line_ref(await->position);
       if (!await->children.empty() && await->children[0] != nullptr) {
         const Expr& call = *await->children[0];
         const ClassInfo* owner = nullptr;
@@ -178,66 +209,217 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
     }
   };
 
+  std::map<std::string, std::string> initial_types;
   for (const Parameter& parameter : member.parameters) {
     AsyncField field;
     field.name = names_.LocalName(parameter.name);
     field.source_type = parameter.type_name;
     field.java_type = java_type_of(parameter.type_name);
+    field.ref = line_ref(parameter.position);
     fields.push_back(field);
+    if (!parameter.type_name.empty())
+      initial_types[parameter.name] = parameter.type_name;
   }
 
-  std::function<void(const Stmt*)> collect = [&](const Stmt* statement) {
-    if (statement == nullptr)
-      return;
-    switch (statement->kind) {
-      case StmtKind::kVariable: {
-        AsyncField field;
-        field.name = names_.LocalName(statement->name);
-        field.source_type = statement->type_name;
-        field.java_type = java_type_of(statement->type_name);
-        fields.push_back(field);
-        add_await_fields(statement->expr.get());
+  const auto boxed_type = [](const std::string& type) {
+    if (type == "boolean")
+      return std::string("Boolean");
+    if (type == "int")
+      return std::string("Integer");
+    if (type == "long")
+      return std::string("Long");
+    if (type == "float")
+      return std::string("Float");
+    if (type == "double")
+      return std::string("Double");
+    if (type == "byte")
+      return std::string("Byte");
+    if (type == "short")
+      return std::string("Short");
+    if (type == "char")
+      return std::string("Character");
+    return type;
+  };
+  const auto expression_type = [&](const Expr* expression,
+                                   const std::map<std::string, std::string>& known) {
+    if (expression == nullptr)
+      return std::string();
+    if (expression->kind == ExprKind::kIdentifier) {
+      const auto found = known.find(expression->text);
+      if (found != known.end())
+        return found->second;
+    }
+    std::string type = StaticTypeNameOf(klass, *expression);
+    if (type.empty() && expression->kind == ExprKind::kIdentifier)
+      type = MemberTypeOf(klass, expression->text);
+    return type;
+  };
+  const auto element_type_of = [&](const std::string& collection_type, std::size_t index,
+                                   std::string* source, std::string* java) {
+    const detail::TypeShape shape = detail::ParseTypeShape(collection_type);
+    if (shape.dimensions > 0) {
+      if (index != 0) {
+        source->clear();
+        *java = "Object";
         return;
       }
-      case StmtKind::kLoopCount: {
-        AsyncField counter;
-        counter.name = names_.GeneratedName("rn_", ++generated_name_counter_);
-        counter.java_type = "int";
-        counter.source_type = builtin_type::kInteger;
-        loop_counters[statement] = counter.name;
-        fields.push_back(counter);
+      *source = shape.base;
+      *java = types_.MapType(shape.base, &klass);
+      return;
+    }
+    std::string base_name;
+    std::vector<std::string> arguments;
+    if (SplitGenericType(collection_type, &base_name, &arguments) && index < arguments.size()) {
+      *source = arguments[index];
+      *java = types_.MapType(arguments[index], &klass);
+      return;
+    }
+    source->clear();
+    *java = "Object";
+  };
+
+  std::function<void(const Stmt*, std::map<std::string, std::string>&)> collect =
+      [&](const Stmt* statement, std::map<std::string, std::string>& known) {
+        if (statement == nullptr)
+          return;
+        switch (statement->kind) {
+          case StmtKind::kVariable: {
+            AsyncField field;
+            field.name = names_.LocalName(statement->name);
+            field.source_type = statement->type_name;
+            field.java_type = java_type_of(statement->type_name);
+            field.ref = line_ref(statement->position);
+            fields.push_back(field);
+            if (!statement->type_name.empty())
+              known[statement->name] = statement->type_name;
+            add_await_fields(statement->expr.get());
+            return;
+          }
+          case StmtKind::kLoopCount: {
+            AsyncField counter;
+            counter.name = names_.GeneratedName("rn_", ++generated_name_counter_);
+            counter.java_type = "int";
+            counter.source_type = builtin_type::kInteger;
+            counter.ref = line_ref(statement->position);
+            loop_counters[statement] = counter.name;
+            fields.push_back(counter);
+            AsyncField step;
+            step.name = names_.GeneratedName("rn_", ++generated_name_counter_);
+            step.java_type = "int";
+            step.source_type = builtin_type::kInteger;
+            step.ref = line_ref(statement->position);
+            loop_steps[statement] = step.name;
+            fields.push_back(step);
+            auto body_types = known;
+            if (!statement->loop_variable.empty())
+              body_types[statement->loop_variable] = builtin_type::kInteger;
+            add_await_fields(statement->loop_begin.get());
+            add_await_fields(statement->loop_end.get());
+            add_await_fields(statement->loop_step.get());
+            for (const StmtPtr& child : statement->body)
+              collect(child.get(), body_types);
+            return;
+          }
+          case StmtKind::kLoopForeach: {
+            ForeachContext context;
+            const std::string collection_type = expression_type(statement->expr.get(), known);
+            context.map = !statement->loop_value_name.empty();
+            std::string key_source;
+            std::string key_java;
+            std::string value_source;
+            std::string value_java;
+            element_type_of(collection_type, 0, &key_source, &key_java);
+            if (context.map) {
+              element_type_of(collection_type, 1, &value_source, &value_java);
+              context.key_type = key_java;
+              context.value_type = value_java;
+              context.entry = names_.GeneratedName("rn_", ++generated_name_counter_);
+              AsyncField entry;
+              entry.name = context.entry;
+              entry.java_type = "java.util.Map.Entry<" + boxed_type(context.key_type) + ", " +
+                                boxed_type(context.value_type) + ">";
+              entry.ref = line_ref(statement->position);
+              fields.push_back(entry);
+              context.key = names_.GeneratedName("rn_", ++generated_name_counter_);
+              AsyncField key;
+              key.name = context.key;
+              key.source_type = key_source;
+              key.java_type = context.key_type;
+              key.ref = line_ref(statement->position);
+              fields.push_back(key);
+              context.value = names_.GeneratedName("rn_", ++generated_name_counter_);
+              AsyncField value;
+              value.name = context.value;
+              value.source_type = value_source;
+              value.java_type = context.value_type;
+              value.ref = line_ref(statement->position);
+              fields.push_back(value);
+            } else {
+              context.key_type = key_java;
+              context.key = names_.GeneratedName("rn_", ++generated_name_counter_);
+              AsyncField key;
+              key.name = context.key;
+              key.source_type = key_source;
+              key.java_type = context.key_type;
+              key.ref = line_ref(statement->position);
+              fields.push_back(key);
+            }
+            context.iterator = names_.GeneratedName("rn_", ++generated_name_counter_);
+            AsyncField iterator;
+            iterator.name = context.iterator;
+            iterator.java_type =
+                "java.util.Iterator<" +
+                (context.map ? "java.util.Map.Entry<" + boxed_type(context.key_type) + ", " +
+                                   boxed_type(context.value_type) + ">"
+                             : boxed_type(context.key_type)) +
+                ">";
+            iterator.ref = line_ref(statement->position);
+            fields.push_back(iterator);
+            foreach_contexts[statement] = context;
+            add_await_fields(statement->expr.get());
+            auto body_types = known;
+            if (!statement->loop_key_name.empty())
+              body_types[statement->loop_key_name] = key_source;
+            if (!statement->loop_value_name.empty())
+              body_types[statement->loop_value_name] = value_source;
+            for (const StmtPtr& child : statement->body)
+              collect(child.get(), body_types);
+            return;
+          }
+          default:
+            break;
+        }
+        if (!(statement->kind == StmtKind::kExpression && statement->expr != nullptr &&
+              statement->expr->kind == ExprKind::kAwait)) {
+          add_await_fields(statement->expr.get());
+        }
         add_await_fields(statement->loop_begin.get());
         add_await_fields(statement->loop_end.get());
         add_await_fields(statement->loop_step.get());
-        for (const StmtPtr& child : statement->body)
-          collect(child.get());
-        return;
-      }
-      default:
-        break;
-    }
-    if (!(statement->kind == StmtKind::kExpression && statement->expr != nullptr &&
-          statement->expr->kind == ExprKind::kAwait)) {
-      add_await_fields(statement->expr.get());
-    }
-    add_await_fields(statement->loop_begin.get());
-    add_await_fields(statement->loop_end.get());
-    add_await_fields(statement->loop_step.get());
-    for (const SwitchCase& switch_case : statement->cases) {
-      for (const ExprPtr& value : switch_case.values)
-        add_await_fields(value.get());
-      for (const StmtPtr& child : switch_case.body)
-        collect(child.get());
-    }
-    for (const StmtPtr& child : statement->body)
-      collect(child.get());
-    for (const StmtPtr& child : statement->else_body)
-      collect(child.get());
-  };
+        for (const SwitchCase& switch_case : statement->cases) {
+          for (const ExprPtr& value : switch_case.values)
+            add_await_fields(value.get());
+          auto case_types = known;
+          for (const StmtPtr& child : switch_case.body)
+            collect(child.get(), case_types);
+        }
+        {
+          auto body_types = known;
+          for (const StmtPtr& child : statement->body)
+            collect(child.get(), body_types);
+        }
+        {
+          auto else_types = known;
+          for (const StmtPtr& child : statement->else_body)
+            collect(child.get(), else_types);
+        }
+      };
   for (const StmtPtr& statement : member.body)
-    collect(statement.get());
+    collect(statement.get(), initial_types);
 
-  std::string context_text = "package " + names_.Package(klass) + ";\n\n";
+  EmittedText context_text;
+  context_text.Mark(source_file, member_line);
+  context_text += "package " + names_.Package(klass) + ";\n\n";
   std::set<std::string> imports;
   for (const AsyncField& field : fields) {
     if (field.source_type.empty())
@@ -258,15 +440,19 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
     context_text += "import " + import + ";\n";
   if (imports.size() > 1)
     context_text += "\n";
-  context_text += "public class " + context_name + " {\n";
+  context_text += (klass.hidden ? "class " : "public class ") + context_name + " {\n";
   for (const AsyncField& field : fields) {
+    context_text.Mark(field.ref.line > 0 ? field.ref.file : source_file,
+                      field.ref.line > 0 ? field.ref.line : member_line);
     context_text += "  public " + field.java_type + " " + field.name;
     if (field.scheduler)
       context_text += " = 异步调度器.创建单线程调度器()";
     context_text += ";\n";
   }
+  context_text.Mark(source_file, member_line);
   context_text += "}";
-  auxiliary_classes_.emplace_back(context_name, context_text);
+  auxiliary_classes_.push_back(
+      AuxiliaryClass{context_name, context_text, context_text.line_refs()});
 
   for (const AsyncField& field : fields) {
     if (field.scheduler)
@@ -299,14 +485,16 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   const std::string state_indent = IndentText(kAsyncStateBodyIndentLevel);
   int next_state_id = 1;
   const auto allocate = [&next_state_id]() { return next_state_id++; };
-  const auto add_state = [&states, independent](int id, AsyncThread thread, const std::string& text,
-                                                const std::vector<int>& priority = {}) {
+  const auto add_state = [&states, independent, &member_ref](
+                             int id, AsyncThread thread, const std::string& text,
+                             const std::vector<int>& priority = {}, LineRef ref = {}) {
     AsyncState state;
     state.id = id;
     state.thread =
         (independent && thread == AsyncThread::kGlobal) ? AsyncThread::kIndependent : thread;
     state.body = text;
     state.jump_priority = priority;
+    state.ref = ref.line > 0 ? ref : member_ref;
     states.push_back(std::move(state));
   };
 
@@ -501,7 +689,23 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
       }
       case StmtKind::kLoopCount: {
         const Stmt& stmt = *statement;
+        if (ContainsAwait(stmt.loop_begin.get()) || ContainsAwait(stmt.loop_end.get()) ||
+            ContainsAwait(stmt.loop_step.get())) {
+          report_unsupported(stmt, "暂不支持在异步计次循环头部使用等待",
+                             "codegen.async-loop-await");
+          return next;
+        }
         const std::string counter_name = loop_counters[&stmt];
+        const std::string step_name = loop_steps[&stmt];
+        long long constant_step = 1;
+        const bool constant =
+            stmt.loop_step == nullptr || detail::TryFoldInteger(*stmt.loop_step, &constant_step);
+        if (constant && constant_step < 0 && config_.Flag(option::kDisableFtcFeatures)) {
+          ReportFtcCompatibility(source_file, stmt.position,
+                                 "禁用 FreeTiecodec 特性时不允许使用负步长计次循环",
+                                 "compat.ftc.negative-step");
+          return next;
+        }
         const int join = allocate();
         const int exit_state = allocate();
         const int body_entry_state = allocate();
@@ -524,11 +728,13 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
 
         add_state(increment, AsyncThread::kMain,
                   state_indent + "上下文." + counter_name + " = 上下文." + counter_name +
-                      " + 1;\n" + state_indent + resume_line(condition));
+                      " + 上下文." + step_name + ";\n" + state_indent + resume_line(condition));
 
+        const std::string end_expression =
+            stmt.loop_end != nullptr ? emit_expression_text(*stmt.loop_end) : "0";
         add_state(condition, AsyncThread::kMain,
-                  "      if (上下文." + counter_name + " < " +
-                      (stmt.loop_end != nullptr ? emit_expression_text(*stmt.loop_end) : "0") +
+                  "      if (上下文." + step_name + " >= 0 ? 上下文." + counter_name + " < " +
+                      end_expression + " : 上下文." + counter_name + " > " + end_expression +
                       ") {\n" + state_indent + resume_line(body_entry_state) + state_indent +
                       "} else {\n" + state_indent + resume_line(exit_state) + state_indent + "}\n",
                   {exit_state, body_entry_state});
@@ -536,6 +742,8 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
         add_state(init_state, AsyncThread::kMain,
                   state_indent + "上下文." + counter_name + " = " +
                       (stmt.loop_begin != nullptr ? emit_expression_text(*stmt.loop_begin) : "0") +
+                      ";\n" + state_indent + "上下文." + step_name + " = " +
+                      (stmt.loop_step != nullptr ? emit_expression_text(*stmt.loop_step) : "1") +
                       ";\n" + state_indent + resume_line(condition));
 
         add_state(statement_entry, thread, state_indent + resume_line(init_state));
@@ -592,6 +800,71 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
           add_state(chain[i], AsyncThread::kGlobal, text);
         }
         add_state(statement_entry, thread, state_indent + resume_line(chain.front()));
+        return statement_entry;
+      }
+      case StmtKind::kLoopForeach: {
+        const Stmt& stmt = *statement;
+        const auto found = foreach_contexts.find(&stmt);
+        if (found == foreach_contexts.end()) {
+          return next;
+        }
+        if (ContainsAwait(stmt.expr.get())) {
+          report_unsupported(stmt, "暂不支持在异步 foreach 的集合表达式中使用等待",
+                             "codegen.async-foreach-await");
+          return next;
+        }
+        const ForeachContext& context = found->second;
+        int exit_state = allocate();
+        std::string exit_text;
+        if (next != 0)
+          exit_text = state_indent + resume_line(next);
+        add_state(exit_state, AsyncThread::kMain, exit_text);
+        const int condition = allocate();
+        std::map<std::string, std::pair<bool, std::string>> saved_renames;
+        const auto bind_loop_variable = [&](const std::string& name, const std::string& field) {
+          if (name.empty() || field.empty())
+            return;
+          const auto existing = renames_.find(name);
+          saved_renames[name] =
+              std::make_pair(existing != renames_.end(),
+                             existing != renames_.end() ? existing->second : std::string());
+          renames_[name] = "上下文." + field;
+        };
+        bind_loop_variable(stmt.loop_key_name, context.key);
+        bind_loop_variable(stmt.loop_value_name, context.value);
+        loop_stack.push_back(LoopContext{condition, exit_state});
+        const int body_entry = compile_list(stmt.body, 0, after_await, condition);
+        loop_stack.pop_back();
+        for (const auto& entry : saved_renames) {
+          if (entry.second.first)
+            renames_[entry.first] = entry.second.second;
+          else
+            renames_.erase(entry.first);
+        }
+        std::string condition_text =
+            state_indent + "if (上下文." + context.iterator + ".hasNext()) {\n";
+        if (context.map) {
+          condition_text += state_indent + "  上下文." + context.entry + " = 上下文." +
+                            context.iterator + ".next();\n";
+          condition_text += state_indent + "  上下文." + context.key + " = 上下文." +
+                            context.entry + ".getKey();\n";
+          condition_text += state_indent + "  上下文." + context.value + " = 上下文." +
+                            context.entry + ".getValue();\n";
+        } else {
+          condition_text += state_indent + "  上下文." + context.key + " = 上下文." +
+                            context.iterator + ".next();\n";
+        }
+        condition_text += state_indent + "  " + resume_line(body_entry);
+        condition_text += state_indent + "} else {\n" + state_indent + "  " +
+                          resume_line(exit_state) + state_indent + "}\n";
+        add_state(condition, AsyncThread::kMain, condition_text, {exit_state, body_entry});
+        const int init_state = allocate();
+        add_state(init_state, AsyncThread::kMain,
+                  state_indent + "上下文." + context.iterator + " = (" +
+                      emit_expression_text(*stmt.expr) + ").iterator();\n" + state_indent +
+                      resume_line(condition));
+        const int statement_entry = allocate();
+        add_state(statement_entry, thread, state_indent + resume_line(init_state));
         return statement_entry;
       }
       case StmtKind::kSwitch: {
@@ -767,15 +1040,19 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   }
   const int entry_state = entry == 0 ? 1 : remap_id(entry);
 
-  std::string machine = IndentText(kClassMemberIndentLevel) + "public void " + state_method +
-                        "(int 状态, " + context_name + " 上下文) {\n" +
-                        IndentText(kMethodBodyIndentLevel) + "switch (状态) {\n";
+  EmittedText machine;
+  machine.Mark(source_file, member_line);
+  machine += "\n" + IndentText(kClassMemberIndentLevel) + "public void " + state_method +
+             "(int 状态, " + context_name + " 上下文) {\n" + IndentText(kMethodBodyIndentLevel) +
+             "switch (状态) {\n";
   std::vector<AsyncState> sorted = states;
   std::sort(sorted.begin(), sorted.end(),
             [](const AsyncState& a, const AsyncState& b) { return a.id > b.id; });
   for (const AsyncState& state : sorted) {
     if (state.body.empty())
       continue;
+    machine.Mark(state.ref.file.empty() ? source_file : state.ref.file,
+                 state.ref.line > 0 ? state.ref.line : member_line);
     machine += IndentText(kMethodBodyIndentLevel) + "case " + std::to_string(state.id) + ":\n";
     std::string open;
     std::string close;
@@ -799,7 +1076,6 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   }
   machine +=
       IndentText(kMethodBodyIndentLevel) + "}\n" + IndentText(kClassMemberIndentLevel) + "}\n";
-
   std::string wrapper =
       "\n" + IndentText(kClassMemberIndentLevel) + "public void " + names_.MemberName(member) + "(";
   for (std::size_t i = 0; i < member.parameters.size(); ++i) {
@@ -821,8 +1097,9 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
   wrapper += IndentText(kMethodBodyIndentLevel) + receiver_prefix + state_method + "(" +
              std::to_string(entry_state) + ", " + context_var + ");\n" +
              IndentText(kClassMemberIndentLevel) + "}\n";
+  body->Mark(source_file, member_line);
   *body += wrapper;
-  pending_async_machines_.push_back("\n" + machine);
+  pending_async_machines_.push_back(std::move(machine));
 
   for (const AsyncField& field : fields) {
     if (field.scheduler)

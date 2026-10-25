@@ -52,7 +52,7 @@ int CompilationSession::Run() {
 
   RunAnnotationPhase();
   if (command_.check_only)
-    return reporter_.ReportCheck(diagnostics_, program_.units.size());
+    return RunCheck();
 
   const int prepare_status = PrepareTarget();
   if (prepare_status != 0)
@@ -67,6 +67,31 @@ int CompilationSession::Run() {
   if (ok)
     ok = RunPlanAndGenerate();
   return reporter_.ReportCompile(diagnostics_, ok);
+}
+
+int CompilationSession::RunCheck() {
+  const int prepare_status = PrepareTarget();
+  if (prepare_status != 0)
+    return prepare_status;
+  if (target_descriptor_ == nullptr) {
+    diagnostics_.ErrorGlobal(
+        "暂不支持的目标平台或语言: " + command_.platform + "/" + command_.language,
+        "target.unsupported");
+    return reporter_.ReportCheck(diagnostics_, program_.units.size());
+  }
+  ApplyAnnotations(program_.units, program_.symbols, extensions_.annotations(), target_, semantics_,
+                   effects_, plan_hints_, diagnostics_);
+  ApplyRequirements(extensions_.requirements(), target_, program_.symbols, semantics_, plan_hints_);
+  if (diagnostics_.has_errors())
+    return reporter_.ReportCheck(diagnostics_, program_.units.size());
+  const OutputPlan plan = ComputeOutputPlan(program_.symbols, entry_, semantics_, plan_hints_,
+                                            config_.profile == "designer");
+  GenerationInput input{program_.units, program_.symbols,        semantics_, effects_, plan,
+                        config_,        target_descriptor_->key, entry_};
+  TargetSession session = target_descriptor_->create(input);
+  if (session.language != nullptr)
+    (void)session.language->Emit(input, diagnostics_);
+  return reporter_.ReportCheck(diagnostics_, program_.units.size());
 }
 
 void CompilationSession::RunAnnotationPhase() {

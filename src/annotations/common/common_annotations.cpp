@@ -129,6 +129,8 @@ void DeprecatedAnnotation::Declare(const Annotation& annotation, const DeclRef& 
   (void)annotation;
   if (declaration.level == AnnotationLevel::kClass)
     ClassFactsOf(declaration, context).deprecated = true;
+  else if (declaration.member != nullptr)
+    MemberFactsOf(declaration, context).deprecated = true;
 }
 
 AnnotationMetadata ExternalBaseClassAnnotation::CreateMetadata() {

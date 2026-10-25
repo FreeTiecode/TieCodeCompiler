@@ -130,7 +130,7 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       shell += "import " + import + ";\n";
     if (shell_imports.size() > 1)
       shell += "\n";
-    shell += "public class " + names_.ClassName(klass);
+    shell += (klass.hidden ? "class " : "public class ") + names_.ClassName(klass);
     if (!shell_base.empty())
       shell += " extends " + shell_base;
     shell += " {\n}";
@@ -184,8 +184,8 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       }
     }
   }
-  for (const std::string& machine : pending_async_machines_)
-    body += machine;
+  for (const EmittedText& machine : pending_async_machines_)
+    body.AppendText(machine);
   pending_async_machines_.clear();
   std::vector<const Member*> trailing_code_blocks;
   if (klass.declaration != nullptr) {
@@ -277,7 +277,8 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       class_suffix = modifiers->suffix_code;
     }
   }
-  out += "public ";
+  if (!klass.hidden)
+    out += "public ";
   if (!class_prefix.empty())
     out += class_prefix + " ";
   out += "class " + names_.ClassName(klass);
@@ -1475,9 +1476,13 @@ void JavaEmitter::ReportUnsupported(const ClassInfo& klass, const SourcePosition
 }
 
 void JavaEmitter::ReportUnresolvedType(const ClassInfo& klass, const std::string& type_name) {
-  ReportUnsupported(klass,
-                    klass.declaration != nullptr ? klass.declaration->position : SourcePosition(),
-                    "暂不支持的未解析类型: \"" + type_name + "\"", "codegen.type.unresolved");
+  const std::string dedup_key = "codegen.type.unresolved|" + type_name;
+  if (!reported_.insert(dedup_key).second)
+    return;
+  const std::string file = klass.declaration != nullptr ? klass.declaration->file : std::string();
+  diagnostics_.Error(file,
+                     klass.declaration != nullptr ? klass.declaration->position : SourcePosition(),
+                     "找不到类型\"" + type_name + "\"", "codegen.type.unresolved");
 }
 
 }
