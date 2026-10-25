@@ -23,6 +23,48 @@ bool IsIdentifierAscii(char c) {
   return IsAsciiAlpha(c) || IsAsciiDigit(c) || c == '_' || c == '$';
 }
 
+char32_t DecodeUtf8(const std::string& text, std::size_t offset, std::size_t* length) {
+  const unsigned char lead = static_cast<unsigned char>(text[offset]);
+  if (lead < 0x80) {
+    *length = 1;
+    return lead;
+  }
+  std::size_t size = 0;
+  char32_t codepoint = 0;
+  if ((lead & 0xE0u) == 0xC0u) {
+    size = 2;
+    codepoint = lead & 0x1Fu;
+  } else if ((lead & 0xF0u) == 0xE0u) {
+    size = 3;
+    codepoint = lead & 0x0Fu;
+  } else if ((lead & 0xF8u) == 0xF0u) {
+    size = 4;
+    codepoint = lead & 0x07u;
+  } else {
+    *length = 1;
+    return 0xFFFD;
+  }
+  if (offset + size > text.size()) {
+    *length = 1;
+    return 0xFFFD;
+  }
+  for (std::size_t i = 1; i < size; ++i) {
+    const unsigned char byte = static_cast<unsigned char>(text[offset + i]);
+    if ((byte & 0xC0u) != 0x80u) {
+      *length = 1;
+      return 0xFFFD;
+    }
+    codepoint = (codepoint << 6) | (byte & 0x3Fu);
+  }
+  *length = size;
+  return codepoint;
+}
+
+bool IsFullWidthPunctuation(char32_t codepoint) {
+  return (codepoint >= 0x3000 && codepoint <= 0x303F) ||
+         (codepoint >= 0xFF00 && codepoint <= 0xFFEF);
+}
+
 }
 
 const char* TokenKindName(TokenKind kind) {
@@ -189,6 +231,16 @@ Token Lexer::MakeToken(TokenKind kind, std::size_t begin_offset, std::size_t beg
 
 Token Lexer::Lex() {
   SkipWhitespaceAndComments();
+  while (!AtEnd() && static_cast<unsigned char>(Current()) >= 0xC0) {
+    std::size_t length = 0;
+    const char32_t codepoint = DecodeUtf8(source_, offset_, &length);
+    if (!IsFullWidthPunctuation(codepoint))
+      break;
+    ReportError("请使用半角符号: " + source_.substr(offset_, length));
+    for (std::size_t i = 0; i < length; ++i)
+      Advance();
+    SkipWhitespaceAndComments();
+  }
 
   const std::size_t begin_offset = offset_;
   const std::size_t begin_line = line_;
@@ -242,8 +294,17 @@ Token Lexer::Lex() {
 
 Token Lexer::LexIdentifierOrKeyword() {
   Token token = MakeToken(TokenKind::kIdentifier, offset_, line_, column_);
-  while (!AtEnd() && IsIdentifierPart(Current()))
+  while (!AtEnd()) {
+    if (static_cast<unsigned char>(Current()) >= 0xC0) {
+      std::size_t length = 0;
+      const char32_t codepoint = DecodeUtf8(source_, offset_, &length);
+      if (IsFullWidthPunctuation(codepoint))
+        break;
+    }
+    if (!IsIdentifierPart(Current()))
+      break;
     Advance();
+  }
   token.text = source_.substr(token.position.offset, offset_ - token.position.offset);
   token.raw = token.text;
   return token;
@@ -400,13 +461,18 @@ Token Lexer::LexCharLiteral() {
     }
     Advance();
   } else if (!AtEnd()) {
-    decoded.push_back(Current());
-    Advance();
+    std::size_t length = 0;
+    DecodeUtf8(source_, offset_, &length);
+    if (length == 0)
+      length = 1;
+    decoded.append(source_, offset_, length);
+    for (std::size_t i = 0; i < length; ++i)
+      Advance();
   }
   if (Current() == '\'')
     Advance();
   else
-    ReportError("未结束的字符字面量");
+    ReportError("未结束的字符字面量或包含多个字符");
   Token token = MakeToken(TokenKind::kChar, begin, begin_line, begin_column);
   token.text = std::move(decoded);
   token.raw = source_.substr(begin, offset_ - begin);
@@ -460,6 +526,7 @@ Token Lexer::LexCodeBlock() {
 
   const std::size_t content_begin = offset_;
   std::size_t content_end = offset_;
+  bool closed = false;
   while (!AtEnd()) {
     std::size_t probe = offset_;
     while (probe < source_.size() && (source_[probe] == ' ' || source_[probe] == '\t'))
@@ -471,6 +538,7 @@ Token Lexer::LexCodeBlock() {
                             source_[after] == '\r';
       if (boundary) {
         content_end = offset_;
+        closed = true;
 
         while (!AtEnd() && Current() != '\n')
           Advance();
@@ -478,6 +546,10 @@ Token Lexer::LexCodeBlock() {
       }
     }
     Advance();
+  }
+  if (!closed) {
+    content_end = source_.size();
+    ReportError("未闭合的 code 块（缺少 @end）");
   }
   if (content_end < content_begin)
     content_end = content_begin;

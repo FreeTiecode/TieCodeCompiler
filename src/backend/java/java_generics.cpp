@@ -53,6 +53,21 @@ std::string TrimTypeText(const std::string& type_name) {
   return type_name.substr(begin, end - begin);
 }
 
+std::string EncodeNamePart(const std::string& text) {
+  std::string result;
+  result.reserve(text.size());
+  for (char c : text) {
+    const unsigned char byte = static_cast<unsigned char>(c);
+    const bool ascii_alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+                             (byte >= '0' && byte <= '9');
+    if (byte >= 0x80 || ascii_alnum || byte == '_' || byte == '$')
+      result.push_back(c);
+    else
+      result.push_back('_');
+  }
+  return result.empty() ? std::string("Type") : result;
+}
+
 }
 
 bool JavaEmitter::IsGenericClass(const ClassInfo& klass) const {
@@ -89,7 +104,8 @@ std::vector<const ClassInfo*> JavaEmitter::TakeGenericNeededClasses() {
 }
 
 void JavaEmitter::RecordNeededClass(const ClassInfo* klass) {
-  if (klass != nullptr && klass->declaration != nullptr) {
+  if (klass != nullptr && klass->declaration != nullptr &&
+      !(klass->has_java_alias && !klass->declaration->generic_parameters.empty())) {
     generic_needed_classes_.insert(klass);
   }
 }
@@ -162,7 +178,11 @@ std::string JavaEmitter::GenericArgumentOutputName(const std::string& argument,
   const std::size_t bracket = stripped.find('[');
   if (bracket != std::string::npos) {
     const std::string element = stripped.substr(0, bracket);
-    const std::string suffix = stripped.substr(bracket);
+    std::string suffix;
+    for (std::size_t i = bracket; i < stripped.size(); ++i) {
+      if (stripped[i] == '[')
+        suffix += "$Array";
+    }
     return GenericArgumentOutputName(element, context) + suffix;
   }
   std::string base_name;
@@ -170,7 +190,7 @@ std::string JavaEmitter::GenericArgumentOutputName(const std::string& argument,
   if (SplitGenericType(stripped, &base_name, &nested)) {
     const ClassInfo* base_class = symbols_.Resolve(base_name, &context);
     if (base_class != nullptr && IsGenericClass(*base_class)) {
-      return GenericTypeOutputName(*base_class, nested, context, true);
+      return GenericTypeOutputName(*base_class, nested, context, !base_class->has_java_alias);
     }
   }
   const ClassInfo* argument_class = symbols_.Resolve(stripped, &context);
@@ -188,13 +208,11 @@ std::string JavaEmitter::GenericTypeOutputName(const ClassInfo& base_class,
                                                const std::vector<std::string>& arguments,
                                                const ClassInfo& context,
                                                bool record_instantiation) {
-  std::string name = names_.ClassName(base_class) + "<";
+  std::string name = EncodeNamePart(names_.ClassName(base_class));
   for (std::size_t i = 0; i < arguments.size(); ++i) {
-    if (i > 0)
-      name += ",";
-    name += GenericArgumentOutputName(arguments[i], context);
+    name += "$";
+    name += EncodeNamePart(GenericArgumentOutputName(arguments[i], context));
   }
-  name += ">";
   if (record_instantiation) {
     std::vector<std::string> substituted;
     substituted.reserve(arguments.size());
@@ -210,7 +228,8 @@ std::string JavaEmitter::GenericTypeOutputName(const ClassInfo& base_class,
     }
   }
   if (record_imports_for_spec_) {
-    RecordSpecImport(names_.ImportPath(base_class));
+    if (!base_class.has_java_alias)
+      RecordSpecImport(names_.ImportPath(base_class));
     RecordSpecImport(names_.Package(base_class) + "." + name);
   }
   return name;
@@ -233,7 +252,7 @@ std::string JavaEmitter::MapGenericAwareType(const ClassInfo& klass, const std::
   std::string result;
   if (SplitGenericType(text, &base_name, &arguments)) {
     const ClassInfo* base_class = symbols_.Resolve(base_name, &klass);
-    if (base_class != nullptr && IsGenericClass(*base_class)) {
+    if (base_class != nullptr && IsGenericClass(*base_class) && !base_class->has_java_alias) {
       if (shell_only) {
         result = names_.ClassName(*base_class);
       } else {
@@ -244,6 +263,17 @@ std::string JavaEmitter::MapGenericAwareType(const ClassInfo& klass, const std::
         RecordSpecImport(names_.ImportPath(*base_class));
         if (!shell_only)
           RecordSpecImport(names_.Package(*base_class) + "." + result);
+      }
+    } else if (base_class != nullptr && base_class->has_java_alias) {
+      result = types_.MapType(base_name, &klass);
+      if (!shell_only) {
+        result += "<";
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+          if (i > 0)
+            result += ", ";
+          result += MapGenericAwareType(klass, arguments[i], record_imports, false);
+        }
+        result += ">";
       }
     } else {
       result = types_.MapType(text, &klass);
@@ -297,27 +327,30 @@ void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::s
   const ClassInfo* base_class = symbols_.Resolve(base_name, &klass);
   if (base_class == nullptr || !IsGenericClass(*base_class))
     return;
-  RecordNeededClass(base_class);
-  const std::string output_name = GenericTypeOutputName(*base_class, arguments, klass, true);
-  if (!base_only) {
-    imports->insert(names_.ImportPath(*base_class));
-  }
-  imports->insert(names_.Package(*base_class) + "." + output_name);
-  {
-    std::string base_base_name;
-    std::vector<std::string> base_base_arguments;
-    std::string substituted_base = base_class->declaration->base_name;
-    const std::vector<std::string>& parameters = base_class->declaration->generic_parameters;
-    for (std::size_t i = 0; i < parameters.size() && i < arguments.size(); ++i) {
-      substituted_base = ReplaceIdentifier(substituted_base, parameters[i], arguments[i]);
+  if (!base_class->has_java_alias) {
+    RecordNeededClass(base_class);
+    const std::string output_name = GenericTypeOutputName(*base_class, arguments, klass, true);
+    if (!base_only) {
+      imports->insert(names_.ImportPath(*base_class));
     }
-    if (SplitGenericType(substituted_base, &base_base_name, &base_base_arguments)) {
-      const ClassInfo* base_base_class = symbols_.Resolve(base_base_name, &klass);
-      if (base_base_class != nullptr && IsGenericClass(*base_base_class)) {
-        RecordNeededClass(base_base_class);
-        const std::string base_output =
-            GenericTypeOutputName(*base_base_class, base_base_arguments, klass, true);
-        imports->insert(names_.Package(*base_base_class) + "." + base_output);
+    imports->insert(names_.Package(*base_class) + "." + output_name);
+    {
+      std::string base_base_name;
+      std::vector<std::string> base_base_arguments;
+      std::string substituted_base = base_class->declaration->base_name;
+      const std::vector<std::string>& parameters = base_class->declaration->generic_parameters;
+      for (std::size_t i = 0; i < parameters.size() && i < arguments.size(); ++i) {
+        substituted_base = ReplaceIdentifier(substituted_base, parameters[i], arguments[i]);
+      }
+      if (SplitGenericType(substituted_base, &base_base_name, &base_base_arguments)) {
+        const ClassInfo* base_base_class = symbols_.Resolve(base_base_name, &klass);
+        if (base_base_class != nullptr && IsGenericClass(*base_base_class) &&
+            !base_base_class->has_java_alias) {
+          RecordNeededClass(base_base_class);
+          const std::string base_output =
+              GenericTypeOutputName(*base_base_class, base_base_arguments, klass, true);
+          imports->insert(names_.Package(*base_base_class) + "." + base_output);
+        }
       }
     }
   }
@@ -343,26 +376,95 @@ void JavaEmitter::CollectGenericTypeImports(const ClassInfo& klass, const std::s
   }
 }
 
+std::string JavaEmitter::SpecializedOwnerName(const ClassInfo& context, const ClassInfo& owner,
+                                              const std::string& receiver_type_text) {
+  if (owner.declaration == nullptr || owner.declaration->generic_parameters.empty())
+    return {};
+  std::string text = TrimTypeText(receiver_type_text);
+  while (!text.empty() && text.back() == '?')
+    text.pop_back();
+  while (EndsWith(text, kOperatorIndex))
+    text = TrimTypeText(text.substr(0, text.size() - 2));
+  if (text.empty())
+    return {};
+  std::string base_name;
+  std::vector<std::string> arguments;
+  if (!SplitGenericType(text, &base_name, &arguments)) {
+    base_name = text;
+    arguments.clear();
+  }
+  const ClassInfo* cursor = symbols_.Resolve(base_name, &context);
+  const std::size_t max_depth = symbols_.class_count() + 1;
+  for (std::size_t depth = 0; cursor != nullptr && cursor->declaration != nullptr; ++depth) {
+    if (depth == max_depth)
+      break;
+    if (cursor == &owner) {
+      if (arguments.size() == owner.declaration->generic_parameters.size())
+        return GenericTypeOutputName(owner, arguments, context, true);
+      return {};
+    }
+    if (cursor->declaration->base_name.empty())
+      break;
+    const std::string base_text = SubstituteTypeParameters(
+        cursor->declaration->base_name, cursor->declaration->generic_parameters, arguments);
+    std::string next_name;
+    std::vector<std::string> next_arguments;
+    if (SplitGenericType(base_text, &next_name, &next_arguments)) {
+      cursor = symbols_.Resolve(next_name, &context);
+      arguments = std::move(next_arguments);
+    } else {
+      cursor = symbols_.Resolve(base_text, &context);
+      arguments.clear();
+    }
+  }
+  return {};
+}
+
+std::string JavaEmitter::OwnerCallName(const ClassInfo& context, const ClassInfo& owner,
+                                       const Expr* receiver) {
+  if (owner.declaration == nullptr || owner.declaration->generic_parameters.empty())
+    return names_.ClassName(owner);
+  std::string receiver_type;
+  if (receiver != nullptr) {
+    receiver_type = ReceiverTypeText(context, receiver);
+    if (receiver_type.empty())
+      receiver_type = StaticTypeNameOf(context, *receiver);
+  } else if (!current_specialization_name_.empty()) {
+    return current_specialization_name_;
+  } else {
+    receiver_type = context.qualified_name;
+  }
+  const std::string specialization = SpecializedOwnerName(context, owner, receiver_type);
+  if (specialization.empty())
+    return names_.ClassName(owner);
+  call_site_imports_.insert(names_.Package(owner) + "." + specialization);
+  return specialization;
+}
+
 std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& instantiation) {
   const ClassInfo& base = *instantiation.base;
   const ClassInfo* saved_base = spec_base_;
   std::vector<std::string> saved_arguments = spec_arguments_;
   std::set<std::string>* saved_imports = spec_imports_;
+  const std::string saved_specialization = current_specialization_name_;
   std::set<std::string> local_imports;
   spec_base_ = &base;
   spec_arguments_ = instantiation.arguments;
   spec_imports_ = &local_imports;
+  current_specialization_name_ = instantiation.output_name;
 
   std::string extends_text;
-  if (base.declaration != nullptr && !base.declaration->base_name.empty()) {
+  if (!base.has_java_alias && base.declaration != nullptr && !base.declaration->base_name.empty()) {
     const std::string substituted_base = SubstituteGenericType(base.declaration->base_name);
     std::string base_name;
     std::vector<std::string> base_arguments;
     if (SplitGenericType(substituted_base, &base_name, &base_arguments)) {
       const ClassInfo* base_class = symbols_.Resolve(base_name, &base);
-      if (base_class != nullptr && IsGenericClass(*base_class)) {
+      if (base_class != nullptr && IsGenericClass(*base_class) && !base_class->has_java_alias) {
         extends_text = GenericTypeOutputName(*base_class, base_arguments, base, false);
         local_imports.insert(names_.Package(*base_class) + "." + extends_text);
+      } else if (base_class != nullptr && base_class->has_java_alias) {
+        extends_text = MapGenericAwareType(base, substituted_base, true, false);
       } else {
         extends_text = types_.MapType(substituted_base, &base);
       }
@@ -396,7 +498,10 @@ std::string JavaEmitter::EmitGenericInstantiation(const GenericInstantiation& in
   spec_base_ = saved_base;
   spec_arguments_ = saved_arguments;
   spec_imports_ = saved_imports;
+  current_specialization_name_ = saved_specialization;
 
+  local_imports.insert(call_site_imports_.begin(), call_site_imports_.end());
+  call_site_imports_.clear();
   std::set<std::string> imports = local_imports;
   imports.insert(config_.Option(option::kRNamespace, config_.namespace_name) + ".R");
 

@@ -1,5 +1,7 @@
 #include "source.h"
 
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -35,10 +37,17 @@ bool FileSystemSourceProvider::ScanDirectory(const std::string& directory,
 
 bool FileSystemSourceProvider::ReadFile(const std::string& path, SourceFile* file,
                                         std::string* error) {
+  errno = 0;
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    if (error != nullptr)
+    if (error != nullptr) {
       *error = "无法读取源文件: " + path;
+      if (errno != 0) {
+        *error += " (";
+        *error += std::strerror(errno);
+        *error += ")";
+      }
+    }
     return false;
   }
   std::ostringstream buffer;

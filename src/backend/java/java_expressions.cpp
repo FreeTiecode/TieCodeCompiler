@@ -108,8 +108,8 @@ bool JavaEmitter::TryEmitPropertyWrite(const ClassInfo& klass, const Expr& targe
             property->parameters.empty()
                 ? EmitExpression(klass, value)
                 : EmitConverted(klass, property->parameters.front().type_name, value);
-        *out_text = names_.ClassName(*property_owner) + "." + names_.MemberName(*property) + "(" +
-                    receiver + ", " + converted + ")";
+        *out_text = OwnerCallName(klass, *property_owner, nullptr) + "." +
+                    names_.MemberName(*property) + "(" + receiver + ", " + converted + ")";
       } else {
         const std::string converted =
             property->parameters.empty()
@@ -139,8 +139,8 @@ bool JavaEmitter::TryEmitPropertyWrite(const ClassInfo& klass, const Expr& targe
             member.parameters.empty()
                 ? EmitExpression(klass, value)
                 : EmitConverted(klass, member.parameters.front().type_name, value);
-        *out_text = names_.ClassName(*cursor) + "." + names_.MemberName(member) + "(" + receiver +
-                    ", " + converted + ")";
+        *out_text = OwnerCallName(klass, *cursor, target.children[0].get()) + "." +
+                    names_.MemberName(member) + "(" + receiver + ", " + converted + ")";
       } else {
         const std::string converted =
             member.parameters.empty()
@@ -285,8 +285,8 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
         if (property != nullptr && property_owner != nullptr) {
           const std::string receiver = EmitExpression(klass, *expression.children[0]);
           if (property_owner->has_java_alias) {
-            return names_.ClassName(*property_owner) + "." + names_.MemberName(*property) + "(" +
-                   receiver + ")";
+            return OwnerCallName(klass, *property_owner, expression.children[0].get()) + "." +
+                   names_.MemberName(*property) + "(" + receiver + ")";
           }
           return receiver + "." + names_.MemberName(*property) + "()";
         }
@@ -327,14 +327,16 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
       const Member* member = ResolveCalledMember(klass, callee, &owner);
       if (member != nullptr && owner != nullptr && owner->has_java_alias) {
         std::string receiver;
+        const Expr* receiver_expr = nullptr;
         if (callee.kind == ExprKind::kIdentifier) {
           receiver = names_.ClassName(klass) + ".this";
         } else {
+          receiver_expr = callee.children[0].get();
           receiver = EmitExpression(klass, *callee.children[0]);
         }
         const std::string arguments = CallArguments(klass, *owner, *member, expression, false);
-        std::string result =
-            names_.ClassName(*owner) + "." + names_.MemberName(*member) + "(" + receiver;
+        std::string result = OwnerCallName(klass, *owner, receiver_expr) + "." +
+                             names_.MemberName(*member) + "(" + receiver;
         if (!arguments.empty())
           result += ", " + arguments;
         result += ")";
@@ -483,10 +485,16 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
               std::string value_type;
               if (indexer->parameters.size() >= 2)
                 value_type = indexer->parameters[1].type_name;
-              return EmitExpression(klass, *access.children[0]) + "." +
-                     names_.MemberName(*indexer) + "(" +
-                     EmitExpression(klass, *access.children[1]) + ", " +
-                     EmitConverted(klass, value_type, *expression.children[1]) + ")";
+              const std::string receiver = EmitExpression(klass, *access.children[0]);
+              const std::string index = EmitExpression(klass, *access.children[1]);
+              const std::string value = EmitConverted(klass, value_type, *expression.children[1]);
+              if (owner != nullptr && owner->has_java_alias) {
+                return OwnerCallName(klass, *owner, access.children[0].get()) + "." +
+                       names_.MemberName(*indexer) + "(" + receiver + ", " + index + ", " + value +
+                       ")";
+              }
+              return receiver + "." + names_.MemberName(*indexer) + "(" + index + ", " + value +
+                     ")";
             }
           }
         }
@@ -506,9 +514,13 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
         if (target_class != nullptr) {
           const ClassInfo* owner = nullptr;
           if (const Member* indexer = FindMemberInChain(symbols_, *target_class, "[]", &owner)) {
-            return EmitExpression(klass, *expression.children[0]) + "." +
-                   names_.MemberName(*indexer) + "(" +
-                   EmitExpression(klass, *expression.children[1]) + ")";
+            const std::string receiver = EmitExpression(klass, *expression.children[0]);
+            const std::string index = EmitExpression(klass, *expression.children[1]);
+            if (owner != nullptr && owner->has_java_alias) {
+              return OwnerCallName(klass, *owner, expression.children[0].get()) + "." +
+                     names_.MemberName(*indexer) + "(" + receiver + ", " + index + ")";
+            }
+            return receiver + "." + names_.MemberName(*indexer) + "(" + index + ")";
           }
         }
       }

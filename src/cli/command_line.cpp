@@ -15,8 +15,6 @@ namespace tiecodec {
 namespace {
 
 const std::vector<std::string> kSourceVersions = {"40", "46", "47"};
-const std::vector<std::string> kKnownPlatforms = {"android", "harmony", "linux",
-                                                  "windows", "ios",     "html"};
 constexpr int kMinOptimizeLevel = 0;
 constexpr int kMaxOptimizeLevel = 3;
 constexpr const char* kGradleModeName = "gradle";
@@ -54,8 +52,7 @@ const OptionSpec kOptions[] = {
      [](CliCommand& command, const std::string&) { command.dump_ast = true; }},
     {"--check", nullptr, false,
      [](CliCommand& command, const std::string&) { command.check_only = true; }},
-    {"--keep-defaults", nullptr, false,
-     [](CliCommand& command, const std::string&) { command.keep_defaults = true; }},
+    {"--keep-defaults", nullptr, false, [](CliCommand&, const std::string&) {}},
     {"-d", "--define", true,
      [](CliCommand& command, const std::string& value) {
        const std::size_t equals = value.find('=');
@@ -136,18 +133,19 @@ std::string BuildUsage() {
       << "  -d, --define <宏>=<值>           定义编译条件变量\n"
       << "  --dir <目录>                     递归扫描目录下所有源文件\n"
       << "  --source <版本>                  源码文件版本 (" << JoinStrings(kSourceVersions, ", ")
-      << ")\n"
+      << "，当前忽略)\n"
       << "  --debug                          调试模式（默认）\n"
       << "  --release                        发布模式\n"
       << "  --hard-mode                      硬输出模式\n"
       << "  --enable-toplevel-stmt           开启顶级语句语法特性支持\n"
+      << "  --keep-defaults                  保留默认成员（当前忽略）\n"
       << "  --profile <模式>                 部署模式 (standard, designer)\n"
       << "  --optimize <级别>                优化级别 (" << kMinOptimizeLevel << "-"
-      << kMaxOptimizeLevel << "，默认1)\n"
+      << kMaxOptimizeLevel << "，当前忽略)\n"
       << "  --disable-lint <名称>            禁用指定 lint 检查\n"
-      << "  --log-level <级别>               日志级别 (debug, info, warning, error)\n"
+      << "  --log-level <级别>               日志级别 (debug, info, warning, error，当前忽略)\n"
       << "  --platform <平台>                目标平台（可用: " << PlatformUsage() << "）\n"
-      << "  --friendly-name <模式>           符号名称模式 (random, pinyin, original)\n"
+      << "  --friendly-name <模式>           符号名称模式 (random, pinyin, original，默认 random)\n"
       << "  --emit-names <路径>              生成稳定输出名并保存映射表\n"
       << "  --stable-names <路径>            读取稳定名称映射表\n"
       << "  --search-lib-prefix <路径>       增加依赖库搜寻路径\n"
@@ -158,7 +156,7 @@ std::string BuildUsage() {
       << "  --retrace <行号表> <文件> <行号>  还原源码行号\n"
       << "  --retrace-batch <JSON文件>       批量还原源码行号\n"
       << "  --android.app.config <文件>      指定 App 配置信息文件\n"
-      << "  --android.legacy.lib.path <路径> 兼容旧工程依赖目录\n"
+      << "  --android.legacy.lib.path <路径> 兼容旧工程依赖目录（当前忽略）\n"
       << "  --android.gradle                 gradle 工程输出格式\n"
       << "  --dump-ast                       解析后打印 AST 摘要\n"
       << "  --check                          仅做解析检查\n"
@@ -167,8 +165,8 @@ std::string BuildUsage() {
 }
 
 bool IsKnownPlatform(const std::string& platform) {
-  return std::find(kKnownPlatforms.begin(), kKnownPlatforms.end(), platform) !=
-         kKnownPlatforms.end();
+  const std::vector<std::string>& platforms = BackendRegistry::Default().platforms();
+  return std::find(platforms.begin(), platforms.end(), platform) != platforms.end();
 }
 
 bool ValidateOptimizeLevel(const std::string& optimize, std::string* error) {

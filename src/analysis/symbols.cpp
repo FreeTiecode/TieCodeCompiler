@@ -35,6 +35,26 @@ std::string SimpleName(const std::string& qualified_name) {
   return dot == std::string::npos ? qualified_name : qualified_name.substr(dot + 1);
 }
 
+bool IsValidOutputIdentifier(const std::string& name) {
+  if (name.empty())
+    return false;
+  bool first = true;
+  for (char raw : name) {
+    const unsigned char c = static_cast<unsigned char>(raw);
+    const bool ascii_alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    const bool ascii_digit = c >= '0' && c <= '9';
+    if (first) {
+      if (!(ascii_alpha || c == '_' || c == '$' || c >= 0x80))
+        return false;
+      first = false;
+      continue;
+    }
+    if (!(ascii_alpha || ascii_digit || c == '_' || c == '$' || c >= 0x80))
+      return false;
+  }
+  return true;
+}
+
 }
 
 std::string ClassInfo::BaseQualifiedName() const {
@@ -66,7 +86,15 @@ bool SymbolTable::AddUnit(const Unit& unit, Diagnostics* diagnostics) {
       info.java_alias = alias->TextArgument(kArgumentParameter);
     }
     if (const Annotation* output = class_decl.FindAnnotation(annotation::kOutputName)) {
-      info.output_name = output->TextArgument(kArgumentParameter);
+      const std::string output_name = output->TextArgument(kArgumentParameter);
+      if (!IsValidOutputIdentifier(output_name)) {
+        if (diagnostics != nullptr) {
+          diagnostics->Error(unit.file, class_decl.position,
+                             "类输出名不是合法的 Java 标识符: " + output_name, "enter.output-name");
+        }
+      } else {
+        info.output_name = output_name;
+      }
     }
     info.global_base = class_decl.HasAnnotation("全局基础类");
     info.forbid_new = class_decl.HasAnnotation(annotation::kNoInstantiation);

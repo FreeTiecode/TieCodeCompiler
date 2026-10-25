@@ -66,7 +66,9 @@ void JavaEmitter::CollectFromExpression(const ClassInfo& klass, const Expr* expr
       if (!expression->children.empty() && expression->children[0] != nullptr) {
         const ClassInfo* owner = nullptr;
         const Member* member = ResolveCalledMember(klass, *expression->children[0], &owner);
-        if (member != nullptr && owner != nullptr && owner != &klass) {
+        if (member != nullptr && owner != nullptr && owner != &klass &&
+            !(owner->has_java_alias && owner->declaration != nullptr &&
+              !owner->declaration->generic_parameters.empty())) {
           imports->insert(names_.ImportPath(*owner));
         }
       }
@@ -97,7 +99,8 @@ void JavaEmitter::CollectCalleeOwners(const ClassInfo& klass, const Expr* expres
           }
           if (receiver != nullptr) {
             CollectMemberAccessImports(klass, owner, ReceiverTypeText(klass, receiver), imports);
-          } else if (owner != &klass) {
+          } else if (owner != &klass && !(owner->has_java_alias && owner->declaration != nullptr &&
+                                          !owner->declaration->generic_parameters.empty())) {
             imports->insert(names_.ImportPath(*owner));
           }
         }
@@ -139,7 +142,8 @@ void JavaEmitter::CollectCalleeOwners(const ClassInfo& klass, const Expr* expres
             const Member* member =
                 FindMemberInChain(symbols_, *receiver_class, target->text, &owner);
             if (member != nullptr && owner != nullptr && owner != &klass) {
-              imports->insert(names_.ImportPath(*owner));
+              CollectMemberAccessImports(
+                  klass, owner, ReceiverTypeText(klass, target->children[0].get()), imports);
             }
           }
         }
@@ -578,38 +582,9 @@ void JavaEmitter::CollectMemberAccessImports(const ClassInfo& klass, const Class
                                              std::set<std::string>* imports) {
   if (owner == nullptr || owner == &klass)
     return;
-  if (receiver_type_text.find('<') == std::string::npos) {
-    imports->insert(names_.ImportPath(*owner));
-    return;
-  }
-  std::string base_name;
-  std::vector<std::string> arguments;
-  if (!SplitGenericType(receiver_type_text, &base_name, &arguments)) {
-    imports->insert(names_.ImportPath(*owner));
-    return;
-  }
-  const ClassInfo* cursor = symbols_.Resolve(base_name, &klass);
-  std::vector<std::string> cursor_arguments = arguments;
-  std::set<const ClassInfo*> visited;
-  while (cursor != nullptr && cursor != owner && cursor->declaration != nullptr &&
-         visited.insert(cursor).second) {
-    const std::string base_text = SubstituteTypeParameters(
-        cursor->declaration->base_name, cursor->declaration->generic_parameters, cursor_arguments);
-    std::string base_base_name;
-    std::vector<std::string> base_arguments;
-    if (SplitGenericType(base_text, &base_base_name, &base_arguments)) {
-      cursor = symbols_.Resolve(base_base_name, &klass);
-      cursor_arguments = base_arguments;
-    } else {
-      cursor = symbols_.Resolve(base_text, &klass);
-      cursor_arguments.clear();
-    }
-  }
-  if (cursor == owner && !owner->declaration->generic_parameters.empty() &&
-      cursor_arguments.size() == owner->declaration->generic_parameters.size()) {
-    const std::string output_name = GenericTypeOutputName(*owner, cursor_arguments, klass, true);
-    RecordNeededClass(owner);
-    imports->insert(names_.Package(*owner) + "." + output_name);
+  const std::string specialization = SpecializedOwnerName(klass, *owner, receiver_type_text);
+  if (!specialization.empty()) {
+    imports->insert(names_.Package(*owner) + "." + specialization);
     return;
   }
   imports->insert(names_.ImportPath(*owner));

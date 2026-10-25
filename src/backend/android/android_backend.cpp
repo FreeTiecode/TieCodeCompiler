@@ -32,6 +32,46 @@ constexpr const char* kAndroidManifestFile = "AndroidManifest.xml";
 constexpr const char* kMetadataFile = "metadata.json";
 constexpr const char* kLibsDirectory = "libs";
 
+std::string JsonEscape(const std::string& value) {
+  std::string result;
+  result.reserve(value.size());
+  for (unsigned char c : value) {
+    switch (c) {
+      case '"':
+        result += "\\\"";
+        break;
+      case '\\':
+        result += "\\\\";
+        break;
+      case '\b':
+        result += "\\b";
+        break;
+      case '\f':
+        result += "\\f";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        if (c < 0x20) {
+          char buffer[7];
+          std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
+          result += buffer;
+        } else {
+          result.push_back(static_cast<char>(c));
+        }
+        break;
+    }
+  }
+  return result;
+}
+
 bool ResolveConstantString(const SymbolTable& symbols, const ClassInfo& context,
                            const std::string& reference, std::string* value) {
   const std::size_t dot = reference.rfind('.');
@@ -73,6 +113,7 @@ bool AndroidBackend::Generate(const ClassInfo* entry, const BackendConfig& confi
   emitter_ = std::make_unique<JavaEmitter>(symbols_, options_, *names_, *types_, diagnostics,
                                            resources_.get());
   sink_ = std::make_unique<FileSystemOutputSink>(config.output_dir);
+  written_class_names_.clear();
 
   emitter_->RunAnalysisLints();
   ValidateEnvironment(contract_, symbols_, diagnostics_);
@@ -213,7 +254,7 @@ std::string AndroidBackend::LibsJson() const {
     json += "    {\n";
     json += std::string("      \"compileOnly\": ") +
             (library_entries_[i].compile_only ? "true" : "false") + ",\n";
-    json += "      \"file\": \"" + library_entries_[i].file + "\"\n";
+    json += "      \"file\": \"" + JsonEscape(library_entries_[i].file) + "\"\n";
     json += "    }";
     if (i + 1 != library_entries_.size())
       json += ",";
@@ -300,8 +341,12 @@ bool AndroidBackend::WriteGradleProject() {
                                      const std::string& override_content) {
     const std::string content =
         override_content.empty() ? ReadTemplate(template_path) : override_content;
-    if (content.empty())
-      return true;
+    if (content.empty()) {
+      if (diagnostics_ != nullptr) {
+        diagnostics_->Fatal("缺少模板文件: " + template_path, "io.template");
+      }
+      return false;
+    }
     return WriteFile(output_path, content);
   };
   std::string settings = ReadTemplate("gradle/settings.gradle");
@@ -659,7 +704,7 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   std::sort(components.begin(), components.end(),
             [](const ComponentEntry& a, const ComponentEntry& b) {
               if (a.is_entry != b.is_entry)
-                return false;
+                return a.is_entry;
               return a.source_qualified < b.source_qualified;
             });
   auto entry_position = std::find_if(components.begin(), components.end(),
@@ -795,27 +840,28 @@ bool AndroidBackend::WriteProjectFiles(const ClassInfo& entry) {
   std::string metadata;
   metadata += "{\n";
   metadata += "  \"appConfig\": {\n";
-  metadata += "    \"appIcon\": \"" + options_.app_icon + "\",\n";
-  metadata += "    \"appName\": \"" + options_.app_name + "\",\n";
+  metadata += "    \"appIcon\": \"" + JsonEscape(options_.app_icon) + "\",\n";
+  metadata += "    \"appName\": \"" + JsonEscape(options_.app_name) + "\",\n";
   metadata += "    \"minSdk\": " + std::to_string(options_.min_sdk) + ",\n";
   metadata += "    \"targetSdk\": " + std::to_string(options_.target_sdk) + ",\n";
   metadata += "    \"versionCode\": " + std::to_string(options_.version_code) + ",\n";
-  metadata += "    \"versionName\": \"" + options_.version_name + "\"\n";
+  metadata += "    \"versionName\": \"" + JsonEscape(options_.version_name) + "\"\n";
   metadata += "  },\n";
   metadata += "  \"libs\": " + LibsJson() + ",\n";
   metadata += "  \"platform\": \"Android\",\n";
   metadata += "  \"productInfo\": {\n";
-  metadata += "    \"assetsDir\": \"" + out + "/" + prefix + "assets\",\n";
+  metadata += "    \"assetsDir\": \"" + JsonEscape(out + "/" + prefix + "assets") + "\",\n";
   metadata += "    \"extraResDirs\": [],\n";
-  metadata += "    \"jniLibsDir\": \"" + out + "/" + prefix + "jniLibs\",\n";
-  metadata += "    \"libsDir\": \"" + out + "/" + LibsDir() + "\",\n";
-  metadata += "    \"manifest\": \"" + out + "/" + prefix + "AndroidManifest.xml\",\n";
-  metadata += "    \"packageName\": \"" + package + "\",\n";
-  metadata += "    \"rNamespace\": \"" + names_->RNamespace() + "\",\n";
-  metadata += "    \"resDir\": \"" + out + "/" + prefix + "res\",\n";
+  metadata += "    \"jniLibsDir\": \"" + JsonEscape(out + "/" + prefix + "jniLibs") + "\",\n";
+  metadata += "    \"libsDir\": \"" + JsonEscape(out + "/" + LibsDir()) + "\",\n";
+  metadata +=
+      "    \"manifest\": \"" + JsonEscape(out + "/" + prefix + "AndroidManifest.xml") + "\",\n";
+  metadata += "    \"packageName\": \"" + JsonEscape(package) + "\",\n";
+  metadata += "    \"rNamespace\": \"" + JsonEscape(names_->RNamespace()) + "\",\n";
+  metadata += "    \"resDir\": \"" + JsonEscape(out + "/" + prefix + "res") + "\",\n";
   const std::string source_dir = SourceDir();
-  metadata += "    \"srcDir\": \"" + out + "/" + prefix +
-              source_dir.substr(0, source_dir.size() - 1) + "\"\n";
+  metadata += "    \"srcDir\": \"" +
+              JsonEscape(out + "/" + prefix + source_dir.substr(0, source_dir.size() - 1)) + "\"\n";
   metadata += "  }\n";
   metadata += "}";
   if (!WriteFile(kMetadataFile, metadata))
@@ -844,14 +890,29 @@ bool AndroidBackend::WriteClassFiles(const ClassInfo* klass, ClassOutput* output
                                      std::set<const ClassInfo*>* emitted_classes) {
   if (klass == nullptr || klass->declaration == nullptr || klass->forbid_output)
     return true;
+  if (klass->has_java_alias && !klass->declaration->generic_parameters.empty()) {
+    if (emitted_classes != nullptr)
+      emitted_classes->insert(klass);
+    return true;
+  }
   if (emitted_classes != nullptr)
     emitted_classes->insert(klass);
+  const std::string class_name = names_->ClassName(*klass);
+  if (!written_class_names_.insert(class_name).second) {
+    if (diagnostics_ != nullptr)
+      diagnostics_->ErrorGlobal("输出类名冲突: " + class_name, "output.duplicate-class");
+    return false;
+  }
   ClassOutput class_output = emitter_->EmitClass(*klass);
-  const std::string path =
-      MainPrefix() + SourceDir() + names_->ClassName(*klass) + kJavaSourceSuffix;
+  const std::string path = MainPrefix() + SourceDir() + class_name + kJavaSourceSuffix;
   if (!WriteFile(path, class_output.text))
     return false;
   for (const auto& auxiliary : emitter_->TakeAuxiliaryClasses()) {
+    if (!written_class_names_.insert(auxiliary.first).second) {
+      if (diagnostics_ != nullptr)
+        diagnostics_->ErrorGlobal("输出类名冲突: " + auxiliary.first, "output.duplicate-class");
+      return false;
+    }
     if (!WriteFile(MainPrefix() + SourceDir() + auxiliary.first + kJavaSourceSuffix,
                    auxiliary.second)) {
       return false;
@@ -877,7 +938,8 @@ bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
     ClassOutput output;
     if (!WriteClassFiles(klass, &output, &emitted_classes))
       return false;
-    RecordLineMap(*klass, output);
+    if (!output.text.empty())
+      RecordLineMap(*klass, output);
     resources_->ProcessClassAnnotations(*klass);
     if (klass->declaration == nullptr)
       continue;
@@ -908,6 +970,13 @@ bool AndroidBackend::GenerateInternal(const ClassInfo* entry) {
     const std::vector<JavaEmitter::GenericInstantiation> generics =
         emitter_->TakePendingGenericInstantiations();
     for (const JavaEmitter::GenericInstantiation& instantiation : generics) {
+      if (!written_class_names_.insert(instantiation.output_name).second) {
+        if (diagnostics_ != nullptr) {
+          diagnostics_->ErrorGlobal("输出类名冲突: " + instantiation.output_name,
+                                    "output.duplicate-class");
+        }
+        return false;
+      }
       const std::string text = emitter_->EmitGenericInstantiation(instantiation);
       if (!WriteFile(MainPrefix() + SourceDir() + instantiation.output_name + kJavaSourceSuffix,
                      text)) {

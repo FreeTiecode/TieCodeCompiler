@@ -223,6 +223,9 @@ private:
   std::string GenericTypeOutputName(const ClassInfo& base_class,
                                     const std::vector<std::string>& arguments,
                                     const ClassInfo& context, bool record_instantiation);
+  std::string SpecializedOwnerName(const ClassInfo& context, const ClassInfo& owner,
+                                   const std::string& receiver_type_text);
+  std::string OwnerCallName(const ClassInfo& context, const ClassInfo& owner, const Expr* receiver);
   std::string GenericArgumentOutputName(const std::string& argument, const ClassInfo& context);
   std::string MapGenericAwareType(const ClassInfo& klass, const std::string& type_name,
                                   bool record_imports, bool shell_only);
@@ -231,6 +234,8 @@ private:
   void CollectGenericTypeImports(const ClassInfo& klass, const std::string& type_name,
                                  std::set<std::string>* imports, bool base_only);
   std::set<const ClassInfo*> generic_needed_classes_;
+  std::set<std::string> call_site_imports_;
+  std::string current_specialization_name_;
   bool HasGenericParameterName(const std::string& type_name) const;
   std::vector<GenericInstantiation> pending_generics_;
   std::set<std::string> recorded_generics_;

@@ -58,6 +58,7 @@ private:
   std::uint64_t SourceFileIndex(const std::string& file);
   void CollectMappingNames();
   std::vector<LibraryEntry> library_entries_;
+  std::set<std::string> written_class_names_;
   SourceMapping source_mapping_;
   std::map<std::string, std::uint64_t> source_file_index_;
   std::string AppBuildGradle() const;

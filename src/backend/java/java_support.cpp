@@ -273,6 +273,26 @@ std::string JavaEmitter::EmitConverted(const ClassInfo& klass, const std::string
 std::string JavaEmitter::InitializerExpression(const ClassInfo& klass,
                                                const std::string& declared_type,
                                                const Expr& value) {
+  if (value.kind == ExprKind::kNull) {
+    const std::string mapped = types_.MapType(SubstituteGenericType(declared_type), &klass);
+    if (mapped == "int")
+      return "0";
+    if (mapped == "long")
+      return "0L";
+    if (mapped == "float")
+      return "0.0F";
+    if (mapped == "double")
+      return "0.0";
+    if (mapped == "boolean")
+      return "false";
+    if (mapped == "byte")
+      return "(byte) 0";
+    if (mapped == "short")
+      return "(short) 0";
+    if (mapped == "char")
+      return "'\\0'";
+    return "null";
+  }
   const TypeShape shape = ParseTypeShape(declared_type);
   if (shape.dimensions > 0 && value.kind == ExprKind::kArrayLiteral) {
     return EmitArrayLiteral(klass, value, types_.MapType(shape.base, &klass), shape.dimensions);

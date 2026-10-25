@@ -41,6 +41,7 @@ void JavaEmitter::SetPlan(
   output_classes_ = &output_classes;
 }
 ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
+  call_site_imports_.clear();
   current_file_ = klass.declaration != nullptr ? klass.declaration->file : std::string();
   const int class_line =
       klass.declaration != nullptr && klass.declaration->declaration_line > 0
@@ -56,16 +57,12 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
       const ClassInfo* base_class = nullptr;
       if (SplitGenericType(klass.declaration->base_name, &base_name, &base_arguments)) {
         base_class = symbols_.Resolve(base_name, &klass);
-        if (base_class != nullptr && IsGenericClass(*base_class)) {
-          shell_base = names_.ClassName(*base_class);
-        }
       } else {
         base_class = symbols_.Resolve(klass.declaration->base_name, &klass);
-        if (base_class != nullptr) {
-          shell_base = names_.BaseName(klass);
-        }
       }
-      if (base_class != nullptr && base_class != &klass && !klass.has_java_alias) {
+      shell_base = names_.BaseName(klass);
+      if (base_class != nullptr && base_class != &klass && !klass.has_java_alias &&
+          !base_class->has_java_alias) {
         shell_imports.insert(names_.ImportPath(*base_class));
       }
       if (klass.has_java_alias)
@@ -200,13 +197,17 @@ ClassOutput JavaEmitter::EmitClass(const ClassInfo& klass) {
     suppress_code_block_blank_ = false;
   }
 
+  imports.insert(call_site_imports_.begin(), call_site_imports_.end());
+  call_site_imports_.clear();
   EmittedText out;
   out.Mark(current_file_, class_line);
   out += "package " + names_.Package(klass) + ";\n\n";
   for (const std::string& import : imports) {
     out += "import " + import + ";\n";
   }
-  std::string base = names_.BaseName(klass);
+  std::string base;
+  if (klass.declaration != nullptr && !klass.declaration->base_name.empty())
+    base = MapGenericAwareType(klass, klass.declaration->base_name, false, false);
   bool global_application = false;
   if (klass.declaration != nullptr) {
     for (const Annotation& annotation : klass.declaration->annotations) {
@@ -597,7 +598,18 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       if (basic_alias) {
         const std::string return_type =
             member.type_name.empty() ? "void" : JavaTypeOf(klass, member.type_name);
-        std::string parameters = klass.java_alias + " __this_obj";
+        std::string receiver_type = klass.java_alias;
+        if (spec_base_ == &klass && !spec_arguments_.empty()) {
+          std::string type_name = klass.qualified_name + "<";
+          for (std::size_t i = 0; i < spec_arguments_.size(); ++i) {
+            if (i > 0)
+              type_name += ",";
+            type_name += spec_arguments_[i];
+          }
+          type_name += ">";
+          receiver_type = MapGenericAwareType(klass, type_name, true, false);
+        }
+        std::string parameters = receiver_type + " __this_obj";
         std::string argument_names;
         for (const Parameter& parameter : member.parameters) {
           const std::string parameter_name = names_.LocalName(parameter.name);
@@ -1041,14 +1053,30 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       std::string inlined;
       LineRef inline_ref;
       if (TryInlineCode(klass, *statement.expr, &inlined, &inline_ref)) {
+        std::vector<std::string> lines = NormalizeCodeBlock(inlined, indent, inline_code_indent_);
+        bool separate_semicolon = false;
+        const std::string trimmed = Trim(inlined);
+        if (!trimmed.empty() && trimmed.back() != ';' && trimmed.back() != '}') {
+          if (!lines.empty() && lines.back().find("//") == std::string::npos) {
+            lines.back() += ";";
+          } else {
+            separate_semicolon = true;
+          }
+        }
         int code_offset = 0;
-        for (const std::string& line : NormalizeCodeBlock(inlined, indent, inline_code_indent_)) {
+        for (const std::string& line : lines) {
           if (inline_ref.line > 0) {
             out->Mark(inline_ref.file, inline_ref.line + code_offset);
           }
           ++code_offset;
           out->append(line);
           out->append("\n");
+        }
+        if (separate_semicolon) {
+          if (inline_ref.line > 0)
+            out->Mark(inline_ref.file, inline_ref.line + code_offset);
+          Indent(indent, out);
+          out->append(";\n");
         }
         return;
       }

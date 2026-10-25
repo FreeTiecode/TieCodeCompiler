@@ -329,6 +329,15 @@ std::string JavaNames::MemberName(const Member& member) const {
   }
   if (IsRandomMode(config_))
     return RandomName(member.name);
+  const unsigned char first = member.name.empty() ? 0 : static_cast<unsigned char>(member.name[0]);
+  const bool may_be_operator = first != 0 && first < 0x80 &&
+                               !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') ||
+                                 (first >= '0' && first <= '9') || first == '_' || first == '$');
+  if (may_be_operator) {
+    const std::string operator_name = OperatorName(member.name);
+    if (!operator_name.empty())
+      return operator_name;
+  }
   if (!IsPinyinMode(config_))
     return member.name;
   bool property_read = member.kind == MemberKind::kPropertyRead;
@@ -358,9 +367,6 @@ std::string JavaNames::MemberName(const Member& member) const {
     if (!result.empty())
       return result;
   }
-  const std::string operator_name = OperatorName(member.name);
-  if (!operator_name.empty())
-    return operator_name;
   return LowerCamelCase(member.name);
 }
 

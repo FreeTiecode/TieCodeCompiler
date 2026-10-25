@@ -20,7 +20,6 @@ struct CliCommand {
   bool help = false;
   bool dump_ast = false;
   bool check_only = false;
-  bool keep_defaults = false;
   std::vector<std::pair<std::string, std::string>> defines;
   std::vector<std::string> disable_lint;
   std::string source_version;

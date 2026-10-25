@@ -117,14 +117,16 @@ int main(int argc, char** argv) {
     std::cerr << "错误: " << error << "\n";
     return 1;
   }
-  if (command.friendly_name != kFriendlyNameOriginal &&
-      command.friendly_name != kFriendlyNamePinyin &&
-      command.friendly_name != kFriendlyNameRandom) {
-    command.friendly_name = kFriendlyNameRandom;
-  }
   if (command.help) {
     std::cout << UsageText();
     return 0;
+  }
+  if (command.friendly_name != kFriendlyNameOriginal &&
+      command.friendly_name != kFriendlyNamePinyin &&
+      command.friendly_name != kFriendlyNameRandom) {
+    std::cerr << "错误: 无效的命名模式: " << command.friendly_name
+              << "（可选: random, pinyin, original）\n";
+    return 2;
   }
   if (!command.retrace_batch.empty()) {
     return RunRetraceBatch(command.retrace_batch);
@@ -146,6 +148,10 @@ int main(int argc, char** argv) {
     }
   }
   files.insert(files.end(), command.sources.begin(), command.sources.end());
+  if (files.empty()) {
+    std::cerr << "错误: 没有待编译的源文件\n";
+    return 2;
+  }
 
   Diagnostics diagnostics;
   ConsoleDiagnosticReporter reporter;
@@ -190,8 +196,9 @@ int main(int argc, char** argv) {
 
   if (command.check_only) {
     diagnostics.Flush(reporter);
-    if (diagnostics.error_count() > 0) {
-      std::cerr << "解析失败，存在 " << diagnostics.error_count() << " 个错误\n";
+    const int failure_count = diagnostics.error_count() + diagnostics.fatal_count();
+    if (failure_count > 0) {
+      std::cerr << "解析失败，存在 " << failure_count << " 个错误\n";
       return 1;
     }
     std::cout << "解析通过，共 " << program.units.size() << " 个源文件\n";
