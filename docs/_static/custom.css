@@ -1,0 +1,75 @@
+:root {
+  --tiecode-font-sans: "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+    "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+  --tiecode-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code",
+    "Noto Sans Mono CJK SC", monospace;
+}
+
+body,
+.wy-body-for-nav,
+.rst-content {
+  font-family: var(--tiecode-font-sans);
+  line-height: 1.72;
+}
+
+.rst-content code,
+.rst-content tt,
+.rst-content pre,
+.rst-content .highlight {
+  font-family: var(--tiecode-font-mono);
+}
+
+.rst-content table.docutils {
+  width: 100%;
+  table-layout: auto;
+}
+
+.rst-content table.docutils td,
+.rst-content table.docutils th {
+  white-space: normal;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.rst-content .highlight pre {
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+/* 状态标记 */
+.status-implemented,
+.status-limited,
+.status-unimplemented {
+  border-left-width: 4px;
+  border-left-style: solid;
+}
+.status-implemented {
+  border-left-color: #2e7d32;
+  background: #f1f8f2;
+}
+.status-limited {
+  border-left-color: #b26a00;
+  background: #fff8ed;
+}
+.status-unimplemented {
+  border-left-color: #b3261e;
+  background: #fdf2f1;
+}
+
+/* RTD 侧栏与正文宽度微调 */
+.wy-nav-side {
+  width: 300px;
+}
+.wy-nav-content {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+}
+@media screen and (min-width: 1100px) {
+  .wy-nav-content-wrap {
+    margin-left: 300px;
+  }
+}
+.wy-side-nav-search > a {
+  font-weight: 600;
+}

@@ -46,12 +46,18 @@ AnnotationMetadata ForcedOutputAnnotation::CreateMetadata() {
 void ForcedOutputAnnotation::Apply(const Annotation& annotation, const DeclRef& declaration,
                                    ApplyContext& context) const {
   const std::string value = annotation.TextArgument(kArgumentParameter);
-  if (value.empty() || !IsTruthyLiteral(value))
+  if (!annotation.arguments.empty() && !IsTruthyLiteral(value))
     return;
-  if (declaration.level == AnnotationLevel::kClass)
+  if (declaration.level == AnnotationLevel::kClass) {
     context.plan.ForceClass(declaration.owner);
-  else
+    if (!annotation.arguments.empty() && declaration.owner != nullptr &&
+        declaration.owner->declaration != nullptr) {
+      for (const Member& member : declaration.owner->declaration->members)
+        context.plan.ForceMember(declaration.owner, &member);
+    }
+  } else {
     context.plan.ForceMember(declaration.owner, declaration.member);
+  }
 }
 
 AnnotationMetadata GlobalClassAnnotation::CreateMetadata() {

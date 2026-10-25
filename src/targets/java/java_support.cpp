@@ -140,44 +140,66 @@ void JavaEmitter::EmitSwap(const ClassInfo& klass, const Expr& exchange, int ind
   const Expr& right = *exchange.children[1];
   const std::string prefix =
       IsOriginalNaming(config_.friendly_name) ? kRandomNamePrefix : kRenamedTempPrefix;
-  const std::string temp = names_.GeneratedName(prefix, ++generated_name_counter_);
-  const auto object_index_writer = [&](const Expr& operand) -> const Member* {
+  struct IndexWriter {
+    const Member* member = nullptr;
+    const ClassInfo* owner = nullptr;
+  };
+  const auto object_index_writer = [&](const Expr& operand) -> IndexWriter {
     if (operand.kind != ExprKind::kArrayAccess || operand.children.size() < 2 ||
         operand.children[0] == nullptr) {
-      return nullptr;
+      return {};
     }
     const std::string type = StaticTypeNameOf(klass, *operand.children[0]);
     if (type.empty() || type.find('[') != std::string::npos)
-      return nullptr;
+      return {};
     const ClassInfo* receiver = symbols_.Resolve(BaseResolvableName(type), &klass);
     if (receiver == nullptr)
-      return nullptr;
+      return {};
     const ClassInfo* owner = nullptr;
-    return FindMemberInChain(symbols_, *receiver, kOperatorIndexAssign, &owner);
+    const Member* member = FindMemberInChain(symbols_, *receiver, kOperatorIndexAssign, &owner);
+    return IndexWriter{member, owner};
   };
-  const Member* right_writer = object_index_writer(right);
-  if (right_writer != nullptr) {
-    const auto raw_index_text = [&](const Expr& operand) -> std::string {
-      if (operand.kind == ExprKind::kArrayAccess && operand.children.size() >= 2 &&
-          operand.children[0] != nullptr && operand.children[1] != nullptr) {
-        return EmitExpression(klass, *operand.children[0]) + "[" +
-               EmitExpression(klass, *operand.children[1]) + "]";
+  const IndexWriter left_writer = object_index_writer(left);
+  const IndexWriter right_writer = object_index_writer(right);
+  if (left_writer.member != nullptr || right_writer.member != nullptr) {
+    if (config_.Flag(option::kDisableFtcFeatures)) {
+      ReportFtcCompatibility(current_file_, exchange.position,
+                             "禁用 FreeTiecodec 特性时不允许对对象下标使用交换运算",
+                             "compat.ftc.indexed-swap");
+      return;
+    }
+    const std::string left_temp = names_.GeneratedName(prefix, ++generated_name_counter_);
+    const std::string right_temp = names_.GeneratedName(prefix, ++generated_name_counter_);
+    Indent(indent, out);
+    out->append(LValueJavaType(klass, left) + " " + left_temp + " = " +
+                EmitExpression(klass, left) + ";\n");
+    Indent(indent, out);
+    out->append(LValueJavaType(klass, right) + " " + right_temp + " = " +
+                EmitExpression(klass, right) + ";\n");
+    const auto assign = [&](const Expr& target, const IndexWriter& writer,
+                            const std::string& value) {
+      if (writer.member == nullptr) {
+        Indent(indent, out);
+        out->append(EmitExpression(klass, target) + " = " + value + ";\n");
+        return;
       }
-      return EmitExpression(klass, operand);
+      const std::string receiver = EmitExpression(klass, *target.children[0]);
+      const std::string index = EmitExpression(klass, *target.children[1]);
+      Indent(indent, out);
+      if (writer.owner != nullptr && writer.owner->HasExternalType("java")) {
+        out->append(OwnerCallName(klass, *writer.owner, target.children[0].get()) + "." +
+                    names_.MemberName(*writer.member) + "(" + receiver + ", " + index + ", " +
+                    value + ");\n");
+      } else {
+        out->append(receiver + "." + names_.MemberName(*writer.member) + "(" + index + ", " +
+                    value + ");\n");
+      }
     };
-    const std::string receiver_text = EmitExpression(klass, *right.children[0]);
-    const std::string index_text = EmitExpression(klass, *right.children[1]);
-    const std::string writer_name = names_.MemberName(*right_writer);
-    Indent(indent, out);
-    out->append(LValueJavaType(klass, right) + " " + temp + " = " + EmitExpression(klass, right) +
-                ";\n");
-    Indent(indent, out);
-    out->append(receiver_text + "." + writer_name + "(" + index_text + ", " + raw_index_text(left) +
-                ");\n");
-    Indent(indent, out);
-    out->append(receiver_text + "." + writer_name + "(" + index_text + ", " + temp + ");\n");
+    assign(left, left_writer, right_temp);
+    assign(right, right_writer, left_temp);
     return;
   }
+  const std::string temp = names_.GeneratedName(prefix, ++generated_name_counter_);
   const std::string type = LValueJavaType(klass, left);
   Indent(indent, out);
   out->append(type + " " + temp + " = " + EmitExpression(klass, right) + ";\n");

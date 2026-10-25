@@ -40,6 +40,19 @@ GeneratedProgram JavaLanguageBackend::Emit(const GenerationInput& input, Diagnos
   JavaEmitter emitter(input.symbols, config, input.semantics, input.effects, input.units, names,
                       types, services, diagnostics, extension_->Resources());
   emitter.SetPlan(input.plan.members, input.plan.virtual_overrides, input.plan.classes);
+  if (config.Flag(option::kDisableFtcFeatures)) {
+    for (const ClassInfo* klass : input.plan.classes) {
+      if (klass == nullptr || klass->declaration == nullptr || klass->forbid_output)
+        continue;
+      if (emitter.IsGenericClass(*klass)) {
+        diagnostics.Error(
+            klass->declaration->file, klass->declaration->position,
+            "禁用 FreeTiecodec 特性时不允许使用泛型类 \"" + klass->declaration->name + "\"",
+            "compat.ftc.generic");
+        return result;
+      }
+    }
+  }
   emitter.RunAnalysisLints();
 
   std::set<std::string> written_names;

@@ -49,6 +49,7 @@ bool BuildTargetConfig(const CliCommand& command, TargetConfig* config, std::str
   config->options[option::kStableNames] = command.stable_names;
   config->options[option::kLineMap] = command.line_map;
   config->options[option::kEnableTopLevelStatements] = command.enable_toplevel_stmt ? "1" : "0";
+  config->options[option::kDisableFtcFeatures] = command.disable_ftc_features ? "1" : "0";
   SetListOption(config, option::kSearchLibPrefix, command.search_lib_prefixes);
   SetListOption(config, option::kSearchSourcePrefix, command.search_source_prefixes);
   SetListOption(config, option::kSearchResPrefix, command.search_res_prefixes);

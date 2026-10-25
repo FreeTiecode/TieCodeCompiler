@@ -2,6 +2,7 @@
 #define TIECODEC_BACKEND_INTERNAL_HELPERS_H
 
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,6 +13,12 @@
 
 namespace tiecodec {
 namespace detail {
+
+inline long long WrapInt32(long long value) {
+  const std::uint64_t truncated = static_cast<std::uint64_t>(value) & 0xffffffffULL;
+  return truncated >= 0x80000000ULL ? static_cast<long long>(truncated) - 0x100000000LL
+                                    : static_cast<long long>(truncated);
+}
 
 inline bool TryFoldInteger(const Expr& expression, long long* value) {
   switch (expression.kind) {
@@ -29,7 +36,7 @@ inline bool TryFoldInteger(const Expr& expression, long long* value) {
           return false;
       }
       try {
-        *value = std::stoll(text);
+        *value = WrapInt32(std::stoll(text));
       } catch (...) {
         return false;
       }
@@ -48,7 +55,7 @@ inline bool TryFoldInteger(const Expr& expression, long long* value) {
       long long operand = 0;
       if (!TryFoldInteger(*expression.children[0], &operand))
         return false;
-      *value = -operand;
+      *value = WrapInt32(-operand);
       return true;
     }
     case ExprKind::kBinary: {
@@ -64,19 +71,19 @@ inline bool TryFoldInteger(const Expr& expression, long long* value) {
         return false;
       const std::string& op = expression.text;
       if (op == "+")
-        *value = left + right;
+        *value = WrapInt32(left + right);
       else if (op == "-")
-        *value = left - right;
+        *value = WrapInt32(left - right);
       else if (op == "*")
-        *value = left * right;
+        *value = WrapInt32(left * right);
       else if (op == "/") {
         if (right == 0)
           return false;
-        *value = left / right;
+        *value = WrapInt32(left / right);
       } else if (op == "%") {
         if (right == 0)
           return false;
-        *value = left % right;
+        *value = WrapInt32(left % right);
       } else
         return false;
       return true;

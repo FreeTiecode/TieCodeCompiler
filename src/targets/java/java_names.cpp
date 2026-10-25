@@ -296,6 +296,7 @@ std::string OperatorName(const std::string& symbol) {
       {"&", "operator_and"},
       {"|", "operator_or"},
       {"^", "operator_xor"},
+      {"?", "operator_question"},
       {kOperatorAssign, "operator_assign"},
       {kOperatorIndex, "operator_array_access"},
       {kOperatorIndexAssign, "operator_array_assign"},

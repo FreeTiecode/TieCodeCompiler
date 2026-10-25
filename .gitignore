@@ -1,5 +1,7 @@
 build/
 tools/
+.venv/
+docs/_build/
 *.o
 *.a
 myeasylog.log

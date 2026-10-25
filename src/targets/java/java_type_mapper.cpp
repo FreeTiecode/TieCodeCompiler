@@ -33,6 +33,26 @@ std::string SimpleName(const std::string& qualified_name) {
   return dot == std::string::npos ? qualified_name : qualified_name.substr(dot + 1);
 }
 
+std::string BoxPrimitive(const std::string& type) {
+  if (type == "boolean")
+    return "Boolean";
+  if (type == "int")
+    return "Integer";
+  if (type == "long")
+    return "Long";
+  if (type == "float")
+    return "Float";
+  if (type == "double")
+    return "Double";
+  if (type == "byte")
+    return "Byte";
+  if (type == "short")
+    return "Short";
+  if (type == "char")
+    return "Character";
+  return type;
+}
+
 }
 
 namespace {
@@ -89,7 +109,7 @@ std::string JavaTypeMapper::MapType(const std::string& type_name,
     for (std::size_t i = 0; i < arguments.size(); ++i) {
       if (i > 0)
         mapped += ", ";
-      mapped += MapType(arguments[i], context_class);
+      mapped += BoxPrimitive(MapType(arguments[i], context_class));
     }
     if (!mapped.empty())
       result += "<" + mapped + ">";

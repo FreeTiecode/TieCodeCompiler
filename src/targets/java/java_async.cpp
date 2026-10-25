@@ -450,22 +450,54 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
       }
       case StmtKind::kIf: {
         const Stmt& stmt = *statement;
+        std::vector<const Expr*> awaits;
+        CollectAwaitNodes(stmt.expr.get(), &awaits);
+        const bool condition_awaits = !awaits.empty();
         int join = allocate();
         std::string join_text;
         if (next != 0)
           join_text = state_indent + resume_line(next);
-        add_state(join, thread, join_text);
-        int then_entry = compile_list(stmt.body, 0, after_await, join);
+        add_state(join, condition_awaits ? AsyncThread::kMain : thread, join_text);
+        const bool body_after_await = after_await || condition_awaits;
+        int then_entry = compile_list(stmt.body, 0, body_after_await, join);
         int else_entry =
-            stmt.else_body.empty() ? join : compile_list(stmt.else_body, 0, after_await, join);
-        int id = allocate();
+            stmt.else_body.empty() ? join : compile_list(stmt.else_body, 0, body_after_await, join);
+        if (!condition_awaits) {
+          int id = allocate();
+          const std::string condition =
+              stmt.expr != nullptr ? emit_expression_text(*stmt.expr) : "false";
+          std::string text = state_indent + "if (" + condition + ") {\n" + state_indent +
+                             resume_line(then_entry) + state_indent + "} else {\n" + state_indent +
+                             resume_line(else_entry) + state_indent + "}\n";
+          add_state(id, thread, text);
+          return id;
+        }
+        std::vector<int> chain;
+        for (std::size_t i = 0; i < awaits.size(); ++i)
+          chain.push_back(allocate());
+        const int condition_state = allocate();
+        const int statement_entry = allocate();
+        for (const Expr* await : awaits)
+          await_replacements_[await] = "上下文." + await_temps[await];
         const std::string condition =
             stmt.expr != nullptr ? emit_expression_text(*stmt.expr) : "false";
-        std::string text = state_indent + "if (" + condition + ") {\n" + state_indent +
-                           resume_line(then_entry) + state_indent + "} else {\n" + state_indent +
-                           resume_line(else_entry) + state_indent + "}\n";
-        add_state(id, thread, text);
-        return id;
+        for (const Expr* await : awaits)
+          await_replacements_.erase(await);
+        std::string condition_text = state_indent + "if (" + condition + ") {\n" + state_indent +
+                                     resume_line(then_entry) + state_indent + "} else {\n" +
+                                     state_indent + resume_line(else_entry) + state_indent + "}\n";
+        add_state(condition_state, AsyncThread::kMain, condition_text);
+        for (std::size_t i = 0; i < awaits.size(); ++i) {
+          const Expr* await = awaits[i];
+          const Expr* operand = await->children.empty() ? nullptr : await->children[0].get();
+          std::string text = state_indent + "上下文." + await_temps[await] + " = " +
+                             (operand != nullptr ? emit_expression_text(*operand) : "null") + ";\n";
+          const int target = (i + 1 < awaits.size()) ? chain[i + 1] : condition_state;
+          text += state_indent + resume_line(target);
+          add_state(chain[i], AsyncThread::kGlobal, text);
+        }
+        add_state(statement_entry, thread, state_indent + resume_line(chain.front()));
+        return statement_entry;
       }
       case StmtKind::kLoopCount: {
         const Stmt& stmt = *statement;
@@ -511,22 +543,111 @@ bool JavaEmitter::EmitAsyncMember(const ClassInfo& klass, const Member& member, 
       }
       case StmtKind::kLoopWhile: {
         const Stmt& stmt = *statement;
+        std::vector<const Expr*> awaits;
+        CollectAwaitNodes(stmt.expr.get(), &awaits);
+        const bool condition_awaits = !awaits.empty();
         int exit_state = allocate();
         std::string exit_text;
         if (next != 0)
           exit_text = state_indent + resume_line(next);
-        add_state(exit_state, thread, exit_text);
-        int condition = allocate();
-        loop_stack.push_back(LoopContext{condition, exit_state});
-        int body_entry = compile_list(stmt.body, 0, after_await, condition);
+        add_state(exit_state, condition_awaits ? AsyncThread::kMain : thread, exit_text);
+        if (!condition_awaits) {
+          int condition = allocate();
+          loop_stack.push_back(LoopContext{condition, exit_state});
+          int body_entry = compile_list(stmt.body, 0, after_await, condition);
+          loop_stack.pop_back();
+          const std::string condition_text =
+              stmt.expr != nullptr ? emit_expression_text(*stmt.expr) : "false";
+          std::string cond_text = state_indent + "if (" + condition_text + ") {\n" + state_indent +
+                                  resume_line(body_entry) + state_indent + "} else {\n" +
+                                  state_indent + resume_line(exit_state) + state_indent + "}\n";
+          add_state(condition, thread, cond_text);
+          return condition;
+        }
+        std::vector<int> chain;
+        for (std::size_t i = 0; i < awaits.size(); ++i)
+          chain.push_back(allocate());
+        const int condition_state = allocate();
+        const int statement_entry = allocate();
+        loop_stack.push_back(LoopContext{chain.front(), exit_state});
+        const int body_entry = compile_list(stmt.body, 0, true, condition_state);
         loop_stack.pop_back();
-        const std::string condition_text =
+        for (const Expr* await : awaits)
+          await_replacements_[await] = "上下文." + await_temps[await];
+        const std::string condition =
             stmt.expr != nullptr ? emit_expression_text(*stmt.expr) : "false";
-        std::string cond_text = state_indent + "if (" + condition_text + ") {\n" + state_indent +
+        for (const Expr* await : awaits)
+          await_replacements_.erase(await);
+        std::string cond_text = state_indent + "if (" + condition + ") {\n" + state_indent +
                                 resume_line(body_entry) + state_indent + "} else {\n" +
                                 state_indent + resume_line(exit_state) + state_indent + "}\n";
-        add_state(condition, thread, cond_text);
-        return condition;
+        add_state(condition_state, AsyncThread::kMain, cond_text);
+        for (std::size_t i = 0; i < awaits.size(); ++i) {
+          const Expr* await = awaits[i];
+          const Expr* operand = await->children.empty() ? nullptr : await->children[0].get();
+          std::string text = state_indent + "上下文." + await_temps[await] + " = " +
+                             (operand != nullptr ? emit_expression_text(*operand) : "null") + ";\n";
+          const int target = (i + 1 < awaits.size()) ? chain[i + 1] : condition_state;
+          text += state_indent + resume_line(target);
+          add_state(chain[i], AsyncThread::kGlobal, text);
+        }
+        add_state(statement_entry, thread, state_indent + resume_line(chain.front()));
+        return statement_entry;
+      }
+      case StmtKind::kSwitch: {
+        const Stmt& stmt = *statement;
+        std::vector<const Expr*> awaits;
+        CollectAwaitNodes(stmt.expr.get(), &awaits);
+        const bool selector_awaits = !awaits.empty();
+        const int join = allocate();
+        std::string join_text;
+        if (next != 0)
+          join_text = state_indent + resume_line(next);
+        add_state(join, selector_awaits ? AsyncThread::kMain : thread, join_text);
+        const bool body_after_await = after_await || selector_awaits;
+        std::vector<int> case_entries;
+        case_entries.reserve(stmt.cases.size());
+        for (const SwitchCase& switch_case : stmt.cases)
+          case_entries.push_back(compile_list(switch_case.body, 0, body_after_await, join));
+        const int default_entry =
+            stmt.else_body.empty() ? join : compile_list(stmt.else_body, 0, body_after_await, join);
+        const int dispatcher = allocate();
+        for (const Expr* await : awaits)
+          await_replacements_[await] = "上下文." + await_temps[await];
+        const std::string selector = stmt.expr != nullptr ? emit_expression_text(*stmt.expr) : "0";
+        for (const Expr* await : awaits)
+          await_replacements_.erase(await);
+        std::string dispatcher_text = state_indent + "switch (" + selector + ") {\n";
+        for (std::size_t i = 0; i < stmt.cases.size(); ++i) {
+          for (const ExprPtr& value : stmt.cases[i].values) {
+            dispatcher_text += state_indent + "case " +
+                               (value != nullptr ? emit_expression_text(*value) : "0") + ":\n";
+          }
+          dispatcher_text += state_indent + "  " + resume_line(case_entries[i]);
+          dispatcher_text += state_indent + "  break;\n";
+        }
+        dispatcher_text += state_indent + "default:\n";
+        dispatcher_text += state_indent + "  " + resume_line(default_entry);
+        dispatcher_text += state_indent + "  break;\n";
+        dispatcher_text += state_indent + "}\n";
+        add_state(dispatcher, selector_awaits ? AsyncThread::kMain : thread, dispatcher_text);
+        if (!selector_awaits)
+          return dispatcher;
+        std::vector<int> chain;
+        for (std::size_t i = 0; i < awaits.size(); ++i)
+          chain.push_back(allocate());
+        const int statement_entry = allocate();
+        for (std::size_t i = 0; i < awaits.size(); ++i) {
+          const Expr* await = awaits[i];
+          const Expr* operand = await->children.empty() ? nullptr : await->children[0].get();
+          std::string text = state_indent + "上下文." + await_temps[await] + " = " +
+                             (operand != nullptr ? emit_expression_text(*operand) : "null") + ";\n";
+          const int target = (i + 1 < awaits.size()) ? chain[i + 1] : dispatcher;
+          text += state_indent + resume_line(target);
+          add_state(chain[i], AsyncThread::kGlobal, text);
+        }
+        add_state(statement_entry, thread, state_indent + resume_line(chain.front()));
+        return statement_entry;
       }
       case StmtKind::kBreak: {
         if (loop_stack.empty())

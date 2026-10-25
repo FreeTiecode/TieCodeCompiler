@@ -20,6 +20,51 @@ namespace tiecodec {
 
 using namespace detail;
 
+namespace {
+
+bool IsPrimitiveJavaType(const std::string& type) {
+  return type == "boolean" || type == "int" || type == "long" || type == "float" ||
+         type == "double" || type == "byte" || type == "short" || type == "char";
+}
+
+std::string BoxJavaPrimitive(const std::string& type) {
+  if (type == "boolean")
+    return "Boolean";
+  if (type == "int")
+    return "Integer";
+  if (type == "long")
+    return "Long";
+  if (type == "float")
+    return "Float";
+  if (type == "double")
+    return "Double";
+  if (type == "byte")
+    return "Byte";
+  if (type == "short")
+    return "Short";
+  if (type == "char")
+    return "Character";
+  return type;
+}
+
+bool IsOperatorMethodName(const std::string& name) {
+  if (name.empty())
+    return false;
+  const unsigned char first = static_cast<unsigned char>(name.front());
+  return first < 0x80 && std::isalnum(first) == 0 && name.front() != '_' && name.front() != '$';
+}
+
+}
+
+bool JavaEmitter::ReportFtcCompatibility(const std::string& file, const SourcePosition& position,
+                                         const std::string& message, const std::string& key) {
+  if (ftc_compat_reported_)
+    return false;
+  diagnostics_.Error(file, position, message, key);
+  ftc_compat_reported_ = true;
+  return true;
+}
+
 JavaEmitter::JavaEmitter(const SymbolTable& symbols, const TargetConfig& config,
                          const SemanticModel& semantics, const EffectStore& effects,
                          std::vector<Unit>& units, const NamingScheme& names, TypeMapper& types,
@@ -395,6 +440,14 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
   if (used_members_ != nullptr && used_members_->count(&member) == 0)
     return;
 
+  if (config_.Flag(option::kDisableFtcFeatures) && IsOperatorMethodName(member.name)) {
+    ReportFtcCompatibility(
+        current_file_, member.position,
+        "禁用 FreeTiecodec 特性时不允许使用运算符重载方法 \"" + member.name + "\"",
+        "compat.ftc.operator");
+    return;
+  }
+
   current_return_type_ = member.type_name;
   const JavaModifiers* modifiers = effects_.Get<JavaModifiers>(&member);
 
@@ -626,6 +679,17 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       const std::string return_type =
           member.type_name.empty() ? "void" : JavaTypeOf(klass, member.type_name);
       const bool has_return = !member.type_name.empty();
+      const ClassInfo* return_class =
+          has_return ? symbols_.Resolve(member.type_name, &klass) : nullptr;
+      if (config_.Flag(option::kDisableFtcFeatures) && return_class != nullptr &&
+          return_class->HasExternalType("java")) {
+        const std::string& alias = return_class->ExternalType("java");
+        if (alias == "byte" || alias == "short" || alias == "char") {
+          ReportFtcCompatibility(current_file_, member.position,
+                                 "禁用 FreeTiecodec 特性时不允许使用原始类型返回值的事件",
+                                 "compat.ftc.event-default");
+        }
+      }
 
       *body += "\n  ";
       if (modifiers == nullptr || !modifiers->hidden)
@@ -637,7 +701,6 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       *body += "    }\n";
       if (has_return) {
         std::string default_value = "null";
-        const ClassInfo* return_class = symbols_.Resolve(member.type_name, &klass);
         if (return_class != nullptr && return_class->HasExternalType("java")) {
           if (return_class->ExternalType("java") == "boolean")
             default_value = "false";
@@ -649,6 +712,12 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
             default_value = "0.0F";
           else if (return_class->ExternalType("java") == "double")
             default_value = "0.0";
+          else if (return_class->ExternalType("java") == "byte")
+            default_value = "(byte) 0";
+          else if (return_class->ExternalType("java") == "short")
+            default_value = "(short) 0";
+          else if (return_class->ExternalType("java") == "char")
+            default_value = "'\\0'";
         }
         *body += "    return " + default_value + ";\n";
       }
@@ -911,7 +980,14 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
         bool separate_semicolon = false;
         const std::string trimmed = Trim(inlined);
         if (!trimmed.empty() && trimmed.back() != ';' && trimmed.back() != '}') {
-          if (!lines.empty() && lines.back().find("//") == std::string::npos) {
+          if (config_.Flag(option::kDisableFtcFeatures)) {
+            SourcePosition position;
+            position.line = inline_ref.line > 0 ? inline_ref.line - 1 : statement.position.line;
+            ReportFtcCompatibility(inline_ref.file.empty() ? current_file_ : inline_ref.file,
+                                   position,
+                                   "禁用 FreeTiecodec 特性时，内联代码语句必须以 ';' 或 '}' 结尾",
+                                   "compat.ftc.inline-semicolon");
+          } else if (!lines.empty() && lines.back().find("//") == std::string::npos) {
             lines.back() += ";";
           } else {
             separate_semicolon = true;
@@ -1002,8 +1078,18 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       } else if (!statement.type_name.empty() &&
                  statement.type_name.find('?') == std::string::npos) {
         const ClassInfo* local_class = symbols_.Resolve(statement.type_name, &klass);
-        if (local_class != nullptr && !local_class->HasExternalType("java") &&
-            !local_class->forbid_new) {
+        if (local_class != nullptr && local_class->HasExternalType("java")) {
+          const std::string& alias = local_class->ExternalType("java");
+          if (IsPrimitiveJavaType(alias)) {
+            Expr null_value;
+            null_value.kind = ExprKind::kNull;
+            out->append(" = " + InitializerExpression(klass, statement.type_name, null_value));
+          } else if (alias == "java.lang.String" || alias == "String") {
+            out->append(" = \"\"");
+          } else {
+            out->append(" = new " + type + "()");
+          }
+        } else if (local_class != nullptr && !local_class->forbid_new) {
           out->append(" = new " + type + "()");
         }
       }
@@ -1023,9 +1109,34 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
           statement.loop_end != nullptr ? EmitExpression(klass, *statement.loop_end) : "0";
       const std::string step =
           statement.loop_step != nullptr ? EmitExpression(klass, *statement.loop_step) : "1";
+      std::string condition;
+      std::string increment;
+      long long constant_step = 1;
+      const bool constant =
+          statement.loop_step == nullptr || TryFoldInteger(*statement.loop_step, &constant_step);
+      if (constant && constant_step < 0) {
+        if (config_.Flag(option::kDisableFtcFeatures)) {
+          ReportFtcCompatibility(current_file_, statement.position,
+                                 "禁用 FreeTiecodec 特性时不允许使用负步长计次循环",
+                                 "compat.ftc.negative-step");
+          return;
+        }
+        condition = counter + " > " + end;
+        increment = step;
+      } else if (constant) {
+        condition = counter + " < " + end;
+        increment = step;
+      } else {
+        const std::string step_name =
+            names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
+        Indent(indent, out);
+        out->append("int " + step_name + " = " + step + ";\n");
+        condition = step_name + " >= 0 ? " + counter + " < " + end + " : " + counter + " > " + end;
+        increment = step_name;
+      }
       Indent(indent, out);
-      out->append("for (int " + counter + " = " + begin + ";" + counter + " < " + end + ";" +
-                  counter + "+=" + step + ") {\n");
+      out->append("for (int " + counter + " = " + begin + ";" + condition + ";" + counter +
+                  "+=" + increment + ") {\n");
       const auto previous = renames_.find(statement.loop_variable);
       const bool had_previous = previous != renames_.end();
       const std::string saved = had_previous ? previous->second : std::string();
@@ -1068,6 +1179,60 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
         if (collection_type.empty())
           collection_type = MemberTypeOf(klass, statement.expr->text);
       }
+      if (!statement.loop_value_name.empty()) {
+        if (config_.Flag(option::kDisableFtcFeatures)) {
+          ReportFtcCompatibility(current_file_, statement.position,
+                                 "禁用 FreeTiecodec 特性时不允许使用 map 键值遍历",
+                                 "compat.ftc.map-foreach");
+          return;
+        }
+        std::string base_name;
+        std::vector<std::string> arguments;
+        SplitGenericType(collection_type, &base_name, &arguments);
+        const std::string key_type =
+            arguments.empty() ? "Object" : BoxJavaPrimitive(types_.MapType(arguments[0], &klass));
+        const std::string value_type = arguments.size() < 2
+                                           ? "Object"
+                                           : BoxJavaPrimitive(types_.MapType(arguments[1], &klass));
+        const std::string entry_type = "java.util.Map.Entry<" + key_type + ", " + value_type + ">";
+        const std::string iterator =
+            names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
+        const std::string key_name =
+            names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
+        const std::string value_name =
+            names_.GeneratedName(kRandomNamePrefix, ++generated_name_counter_);
+        Indent(indent, out);
+        out->append("for (" + entry_type + " " + iterator + " : " +
+                    EmitExpression(klass, *statement.expr) + ".entrySet()) {\n");
+        Indent(indent + 1, out);
+        out->append(key_type + " " + key_name + " = " + iterator + ".getKey();\n");
+        Indent(indent + 1, out);
+        out->append(value_type + " " + value_name + " = " + iterator + ".getValue();\n");
+        const auto previous_key = renames_.find(statement.loop_key_name);
+        const bool had_previous_key = previous_key != renames_.end();
+        const std::string saved_key = had_previous_key ? previous_key->second : std::string();
+        const auto previous_value = renames_.find(statement.loop_value_name);
+        const bool had_previous_value = previous_value != renames_.end();
+        const std::string saved_value = had_previous_value ? previous_value->second : std::string();
+        renames_[statement.loop_key_name] = key_name;
+        renames_[statement.loop_value_name] = value_name;
+        for (const StmtPtr& child : statement.body) {
+          EmitStatement(klass, *child, indent + 1, out);
+        }
+        if (had_previous_key)
+          renames_[statement.loop_key_name] = saved_key;
+        else
+          renames_.erase(statement.loop_key_name);
+        if (had_previous_value)
+          renames_[statement.loop_value_name] = saved_value;
+        else
+          renames_.erase(statement.loop_value_name);
+        if (statement.end_line > 0)
+          out->Mark(current_file_, statement.end_line);
+        Indent(indent, out);
+        out->append("}\n");
+        return;
+      }
       const TypeShape shape = ParseTypeShape(collection_type);
       std::string element_type = "Object";
       if (shape.dimensions > 0) {
@@ -1108,6 +1273,14 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       return;
     }
     case StmtKind::kSubscribe: {
+      if (subscriptions_emitted_) {
+        if (config_.Flag(option::kDisableFtcFeatures)) {
+          ReportFtcCompatibility(current_file_, statement.position,
+                                 "禁用 FreeTiecodec 特性时不允许重复订阅事件",
+                                 "compat.ftc.subscriptions");
+        }
+        return;
+      }
       if (EmitSubscriptions(klass, indent, out))
         subscriptions_emitted_ = true;
       return;

@@ -18,6 +18,7 @@ inline constexpr const char* kStableNames = "stable-names";
 inline constexpr const char* kLineMap = "line-map";
 inline constexpr const char* kEnableTopLevelStatements = "enable-toplevel-stmt";
 inline constexpr const char* kDisableLint = "disable-lint";
+inline constexpr const char* kDisableFtcFeatures = "disable-ftc-features";
 inline constexpr const char* kRNamespace = "r-namespace";
 
 inline constexpr const char* kSearchLibPrefix = "search-lib-prefix";

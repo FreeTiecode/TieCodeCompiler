@@ -1,5 +1,6 @@
 #include "lexer.h"
 
+#include <algorithm>
 #include <cctype>
 
 #include "constants.h"
@@ -343,9 +344,17 @@ Token Lexer::LexNumber() {
   }
 
   TokenKind kind = TokenKind::kInteger;
-  if (!is_hex) {
+  if (is_hex) {
     const char suffix = Current();
     if (suffix == 'L' || suffix == 'l') {
+      kind = TokenKind::kLong;
+      Advance();
+    }
+  } else {
+    const char suffix = Current();
+    if (suffix == 'L' || suffix == 'l') {
+      if (is_decimal)
+        ReportError("此处不应该出现 'L'");
       kind = TokenKind::kLong;
       Advance();
     } else if (suffix == 'F' || suffix == 'f') {
@@ -362,6 +371,20 @@ Token Lexer::LexNumber() {
   Token token = MakeToken(kind, begin, begin_line, begin_column);
   token.text = source_.substr(begin, offset_ - begin);
   token.raw = token.text;
+  if (!is_decimal && !is_hex && (kind == TokenKind::kInteger || kind == TokenKind::kLong)) {
+    const bool long_suffix = kind == TokenKind::kLong;
+    std::string digits = token.text;
+    if (long_suffix && !digits.empty())
+      digits.pop_back();
+    if (digits.size() > 1 && digits.front() == '0') {
+      const bool octal = std::all_of(digits.begin() + 1, digits.end(),
+                                     [](char c) { return c >= '0' && c <= '7'; });
+      if (octal) {
+        const long long value = std::stoll(digits.substr(1), nullptr, 8);
+        token.text = std::to_string(value) + (long_suffix ? "L" : "");
+      }
+    }
+  }
   return token;
 }
 

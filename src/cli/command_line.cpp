@@ -54,6 +54,8 @@ const OptionSpec kOptions[] = {
      [](CliCommand& command, const std::string&) { command.dump_ast = true; }},
     {"--check", nullptr, false,
      [](CliCommand& command, const std::string&) { command.check_only = true; }},
+    {"--disable-ftc-features", nullptr, false,
+     [](CliCommand& command, const std::string&) { command.disable_ftc_features = true; }},
     {"--keep-defaults", nullptr, false, [](CliCommand&, const std::string&) {}},
     {"-d", "--define", true,
      [](CliCommand& command, const std::string& value) {
@@ -145,6 +147,7 @@ std::string BuildUsage(const TargetRegistry& targets) {
       << "  --optimize <级别>                优化级别 (" << kMinOptimizeLevel << "-"
       << kMaxOptimizeLevel << "，当前忽略)\n"
       << "  --disable-lint <名称>            禁用指定 lint 检查\n"
+      << "  --disable-ftc-features           禁用 FreeTiecodec 扩展特性（兼容模式）\n"
       << "  --log-level <级别>               日志级别 (debug, info, warning, error，当前忽略)\n"
       << "  --platform <平台>                目标平台（可用: " << PlatformUsage(targets) << "）\n"
       << "  --language <语言>                目标语言（默认: java）\n"

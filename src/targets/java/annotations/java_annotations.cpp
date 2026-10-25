@@ -63,8 +63,14 @@ void OutputNameAnnotation::Declare(const Annotation& annotation, const DeclRef& 
     context.semantics.ClassFactsFor(declaration.klass).output_name = value;
     return;
   }
-  if (declaration.member != nullptr)
+  if (declaration.member != nullptr) {
+    if (!IsValidJavaIdentifier(value)) {
+      context.diagnostics.Error(context.unit.file, declaration.member->position,
+                                "成员输出名不是合法的 Java 标识符: " + value, "enter.output-name");
+      return;
+    }
     context.semantics.MemberFactsFor(declaration.member).output_name = value;
+  }
 }
 
 AnnotationMetadata HiddenAnnotation::CreateMetadata() {

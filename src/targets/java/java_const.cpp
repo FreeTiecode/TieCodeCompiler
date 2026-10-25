@@ -6,6 +6,7 @@
 #include <string>
 
 #include "constants.h"
+#include "internal/helpers.h"
 
 namespace tiecodec {
 namespace {
@@ -88,7 +89,7 @@ bool FoldConstant(const Expr& expression, ConstantValue* value) {
         return end != nullptr && *end == '\0';
       }
       value->kind = ConstantValue::Kind::kInteger;
-      value->integer = std::strtoll(text.c_str(), &end, 10);
+      value->integer = detail::WrapInt32(std::strtoll(text.c_str(), &end, 10));
       return end != nullptr && *end == '\0';
     }
     case ExprKind::kParen: {
@@ -209,20 +210,20 @@ bool FoldConstant(const Expr& expression, ConstantValue* value) {
       }
       value->kind = ConstantValue::Kind::kInteger;
       if (op == "+")
-        value->integer = left_int + right_int;
+        value->integer = detail::WrapInt32(left_int + right_int);
       if (op == "-")
-        value->integer = left_int - right_int;
+        value->integer = detail::WrapInt32(left_int - right_int);
       if (op == "*")
-        value->integer = left_int * right_int;
+        value->integer = detail::WrapInt32(left_int * right_int);
       if (op == "/") {
         if (right_int == 0)
           return false;
-        value->integer = left_int / right_int;
+        value->integer = detail::WrapInt32(left_int / right_int);
       }
       if (op == "%") {
         if (right_int == 0)
           return false;
-        value->integer = left_int % right_int;
+        value->integer = detail::WrapInt32(left_int % right_int);
       }
       return true;
     }

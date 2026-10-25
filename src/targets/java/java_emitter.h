@@ -145,6 +145,8 @@ private:
   bool EmitSubscriptions(const ClassInfo& klass, int indent, EmittedText* body);
 
   bool LintDisabled(const std::string& key) const;
+  bool ReportFtcCompatibility(const std::string& file, const SourcePosition& position,
+                              const std::string& message, const std::string& key);
   void AnalyzeMember(const ClassInfo& klass, const Member& member);
   void LintAutoCast(const ClassInfo& klass, const SourcePosition& position,
                     const std::string& target_type, const Expr* expression);
@@ -299,6 +301,7 @@ private:
   std::set<std::string> reported_;
   std::set<const ClassInfo*> emitted_;
   bool suppress_code_block_blank_ = false;
+  bool ftc_compat_reported_ = false;
 };
 
 }

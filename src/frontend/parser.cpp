@@ -492,6 +492,12 @@ bool Parser::ParseClassBodyItem(ClassDecl* class_decl) {
 
     if (Check("方法")) {
       member.kind = MemberKind::kMethod;
+      for (const Annotation& annotation : member.annotations) {
+        if (annotation.name == annotation::kPropertyRead)
+          member.kind = MemberKind::kPropertyRead;
+        else if (annotation.name == annotation::kPropertyWrite)
+          member.kind = MemberKind::kPropertyWrite;
+      }
       Next();
       ParseMethod(class_decl, member, "方法");
       return true;

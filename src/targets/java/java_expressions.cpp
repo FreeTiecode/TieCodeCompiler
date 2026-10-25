@@ -251,6 +251,13 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
         return expression.text;
       }
 
+      if (expression.text == "长度") {
+        const std::string receiver_type = StaticTypeNameOf(klass, *expression.children[0]);
+        if (!receiver_type.empty() && receiver_type.back() == ']') {
+          return EmitExpression(klass, *expression.children[0]) + ".length";
+        }
+      }
+
       if (expression.children[0]->kind == ExprKind::kIdentifier) {
         const ClassInfo* static_class = symbols_.Resolve(expression.children[0]->text, &klass);
         const bool shadowed = MemberTypeOf(klass, expression.children[0]->text).size() > 0 ||
@@ -406,14 +413,20 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
           expression.children[1] != nullptr) {
         const std::string left_type = StaticTypeNameOf(klass, *expression.children[0]);
         const ClassInfo* left_class = symbols_.Resolve(left_type, &klass);
-        if (left_class != nullptr && !left_class->HasExternalType("java")) {
+        if (left_class != nullptr) {
           const ClassInfo* overload_owner = nullptr;
           if (const Member* overload =
                   FindMemberInChain(symbols_, *left_class, expression.text, &overload_owner)) {
             if (overload->kind == MemberKind::kMethod) {
-              return EmitExpression(klass, *expression.children[0]) + "." +
-                     names_.MemberName(*overload) + "(" +
-                     EmitExpression(klass, *expression.children[1]) + ")";
+              const Expr& left = *expression.children[0];
+              const Expr& right = *expression.children[1];
+              if (left_class->HasExternalType("java")) {
+                return OwnerCallName(klass, *left_class, &left) + "." +
+                       names_.MemberName(*overload) + "(" + EmitExpression(klass, left) + ", " +
+                       EmitExpression(klass, right) + ")";
+              }
+              return EmitExpression(klass, left) + "." + names_.MemberName(*overload) + "(" +
+                     EmitExpression(klass, right) + ")";
             }
           }
         }
