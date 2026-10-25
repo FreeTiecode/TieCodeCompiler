@@ -102,7 +102,8 @@ bool JavaEmitter::TryEmitPropertyWrite(const ClassInfo& klass, const Expr& targe
     const ClassInfo* property_owner = nullptr;
     const Member* property = FindMemberInChain(symbols_, klass, target.text, &property_owner);
     if (property != nullptr && property->kind == MemberKind::kPropertyWrite) {
-      const std::string receiver = names_.ClassName(klass) + ".this";
+      const std::string receiver =
+          alias_static_context_ ? "__this_obj" : names_.ClassName(klass) + ".this";
       if (property_owner->has_java_alias) {
         const std::string converted =
             property->parameters.empty()
@@ -210,7 +211,8 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
     case ExprKind::kIdentifier: {
       const bool is_local = local_types_.count(expression.text) != 0;
       const bool is_parameter = current_parameters_.count(expression.text) != 0;
-      if (!is_local && !is_parameter && renames_.count(expression.text) == 0) {
+      if (!is_local && !is_parameter && renames_.count(expression.text) == 0 &&
+          MemberTypeOf(klass, expression.text).empty()) {
         const ClassInfo* klass_ref = symbols_.Resolve(expression.text, &klass);
         if (klass_ref != nullptr) {
           const std::string java_name = names_.ClassName(*klass_ref);
@@ -250,7 +252,8 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
 
       if (expression.children[0]->kind == ExprKind::kIdentifier) {
         const ClassInfo* static_class = symbols_.Resolve(expression.children[0]->text, &klass);
-        const bool shadowed = local_types_.count(expression.children[0]->text) != 0 ||
+        const bool shadowed = MemberTypeOf(klass, expression.children[0]->text).size() > 0 ||
+                              local_types_.count(expression.children[0]->text) != 0 ||
                               current_parameters_.count(expression.children[0]->text) != 0;
         if (static_class != nullptr && !shadowed) {
           std::string field_name = expression.text;
@@ -329,7 +332,7 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
         std::string receiver;
         const Expr* receiver_expr = nullptr;
         if (callee.kind == ExprKind::kIdentifier) {
-          receiver = names_.ClassName(klass) + ".this";
+          receiver = alias_static_context_ ? "__this_obj" : names_.ClassName(klass) + ".this";
         } else {
           receiver_expr = callee.children[0].get();
           receiver = EmitExpression(klass, *callee.children[0]);
@@ -350,7 +353,8 @@ std::string JavaEmitter::EmitExpression(const ClassInfo& klass, const Expr& expr
         } else if (callee.children[0] != nullptr &&
                    callee.children[0]->kind == ExprKind::kIdentifier) {
           const ClassInfo* static_receiver = symbols_.Resolve(callee.children[0]->text, &klass);
-          const bool shadowed = local_types_.count(callee.children[0]->text) != 0 ||
+          const bool shadowed = MemberTypeOf(klass, callee.children[0]->text).size() > 0 ||
+                                local_types_.count(callee.children[0]->text) != 0 ||
                                 current_parameters_.count(callee.children[0]->text) != 0;
           if (static_receiver != nullptr && !shadowed) {
             receiver = names_.ClassName(*static_receiver) + ".";

@@ -226,6 +226,7 @@ TEST_F(SmokeTest, EmitsLegalGenericSpecializationNames) {
             "  变量 列表: 文本集合\n"
             "  事件 启动窗口:创建完毕()\n"
             "    列表.添加成员(\"x\")\n"
+            "    调试输出(列表[0])\n"
             "  结束 事件\n"
             "结束 类\n";
   source.close();
@@ -246,11 +247,82 @@ TEST_F(SmokeTest, EmitsLegalGenericSpecializationNames) {
   EXPECT_TRUE(found_specialization) << "未生成 集合$文本.java";
   EXPECT_FALSE(fs::exists(src_dir / "集合.java")) << "不应生成别名泛型裸壳";
 
+  const fs::path specialization = src_dir / "集合$文本.java";
+  ASSERT_TRUE(fs::is_regular_file(specialization)) << result.log;
+  const std::string spec = ReadFile(specialization);
+  EXPECT_TRUE(Contains(spec, "__this_obj")) << spec;
+  EXPECT_EQ(spec.find("集合.this"), std::string::npos) << spec;
+
   const fs::path launcher = src_dir / "启动窗口.java";
   ASSERT_TRUE(fs::is_regular_file(launcher)) << result.log;
   const std::string java = ReadFile(launcher);
   EXPECT_TRUE(Contains(java, "集合$文本.添加成员")) << java;
+  EXPECT_TRUE(Contains(java, "operator_array_access")) << java;
   EXPECT_EQ(java.find("import 结绳.JVM.集合<"), std::string::npos) << java;
+}
+
+TEST_F(SmokeTest, EmitsFixedSizeArrayField) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  变量 数字: 整数[3]\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    数字[0] = 1\n"
+            "    调试输出(数字[0])\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "new int[3]")) << java;
+  EXPECT_TRUE(Contains(java, "数字[0] = 1")) << java;
+}
+
+TEST_F(SmokeTest, InitializesAliasedReferenceFields) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "@指代类(\"java.util.ArrayList\")\n"
+            "类 列表类\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 文本字段: 文本\n"
+            "  变量 对象字段: 对象\n"
+            "  变量 列表字段: 列表类\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    调试输出(文本字段)\n"
+            "    调试输出(对象字段)\n"
+            "    调试输出(列表字段)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "文本字段 = \"\"")) << java;
+  EXPECT_TRUE(Contains(java, "对象字段 = new Object()")) << java;
+  EXPECT_TRUE(Contains(java, "列表字段 = new java.util.ArrayList()")) << java;
+}
+
+TEST_F(SmokeTest, ResolvesShadowingFieldProperty) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 相机\n"
+            "  属性读 值(): 整数\n"
+            "    返回 1\n"
+            "  结束 属性\n"
+            "结束 类\n"
+            "类 启动窗口 : 窗口\n"
+            "  变量 相机: 相机 = 创建 相机()\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    调试输出(相机.值)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "相机.值()")) << java;
 }
 
 TEST_F(SmokeTest, ReportsFullWidthPunctuation) {

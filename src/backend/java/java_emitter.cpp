@@ -715,34 +715,62 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
       } else if (!member.code_text.empty()) {
         *body += " = " + Trim(member.code_text);
       } else {
-        const std::string base_type = member.type_name.substr(0, member.type_name.find('?'));
-        const ClassInfo* basic = symbols_.Resolve(base_type, &klass);
-        if (member.kind != MemberKind::kConstant && basic != nullptr && basic->has_java_alias) {
-          if (basic->java_alias == "boolean")
-            *body += " = false";
-          else if (basic->java_alias == "int")
-            *body += " = 0";
-          else if (basic->java_alias == "long")
-            *body += " = 0L";
-          else if (basic->java_alias == "float")
-            *body += " = 0.0F";
-          else if (basic->java_alias == "double")
-            *body += " = 0.0";
-          else if (basic->java_alias == "byte")
-            *body += " = 0";
-        }
+        const TypeShape shape = ParseTypeShape(member.type_name);
+        if (shape.dimensions > 0) {
+          if (!shape.capacities.empty()) {
+            *body += " = new " + MapGenericAwareType(klass, shape.base, true, false);
+            for (int i = 0; i < shape.dimensions; ++i) {
+              if (i < static_cast<int>(shape.capacities.size()) && !shape.capacities[i].empty()) {
+                *body += "[" + shape.capacities[i] + "]";
+              } else {
+                *body += "[]";
+              }
+            }
+          }
+        } else {
+          const std::string base_type = member.type_name.substr(0, member.type_name.find('?'));
+          const ClassInfo* basic = symbols_.Resolve(base_type, &klass);
+          bool primitive_alias = false;
+          if (basic != nullptr && basic->has_java_alias) {
+            const std::string& alias = basic->java_alias;
+            primitive_alias = alias == "boolean" || alias == "int" || alias == "long" ||
+                              alias == "float" || alias == "double" || alias == "byte" ||
+                              alias == "short" || alias == "char";
+            if (member.kind != MemberKind::kConstant) {
+              if (alias == "boolean")
+                *body += " = false";
+              else if (alias == "int")
+                *body += " = 0";
+              else if (alias == "long")
+                *body += " = 0L";
+              else if (alias == "float")
+                *body += " = 0.0F";
+              else if (alias == "double")
+                *body += " = 0.0";
+              else if (alias == "byte")
+                *body += " = 0";
+            }
+            if ((alias == "java.lang.String" || alias == "String") &&
+                member.type_name.find('?') == std::string::npos) {
+              *body += " = \"\"";
+            }
+          }
 
-        const bool has_component_config = std::any_of(
-            member.annotations.begin(), member.annotations.end(), [](const Annotation& annotation) {
-              return annotation.name == annotation::kComponentConfig ||
-                     annotation.name == annotation::kLayoutConfig;
-            });
-        const bool nullable = member.type_name.find('?') != std::string::npos;
-        const bool array = member.type_name.find('[') != std::string::npos;
-        const ClassInfo* field_class = symbols_.Resolve(member.type_name, &klass);
-        if (!has_component_config && !nullable && !array && field_class != nullptr &&
-            !field_class->has_java_alias && !field_class->forbid_new) {
-          *body += " = new " + type + "()";
+          const bool has_component_config =
+              std::any_of(member.annotations.begin(), member.annotations.end(),
+                          [](const Annotation& annotation) {
+                            return annotation.name == annotation::kComponentConfig ||
+                                   annotation.name == annotation::kLayoutConfig;
+                          });
+          const bool nullable = member.type_name.find('?') != std::string::npos;
+          const ClassInfo* field_class = symbols_.Resolve(member.type_name, &klass);
+          if (!has_component_config && !nullable && field_class != nullptr &&
+              !field_class->forbid_new &&
+              (!field_class->has_java_alias ||
+               (!primitive_alias && field_class->java_alias != "java.lang.String" &&
+                field_class->java_alias != "String"))) {
+            *body += " = new " + type + "()";
+          }
         }
       }
       *body += ";\n";
