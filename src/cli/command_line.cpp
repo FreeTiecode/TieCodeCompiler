@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "backend_registry.h"
 #include "constants.h"
+#include "target_registry.h"
 #include "text_util.h"
 
 namespace tiecodec {
@@ -38,6 +38,8 @@ const OptionSpec kOptions[] = {
      [](CliCommand& command, const std::string& value) { command.source_dirs.push_back(value); }},
     {"--platform", nullptr, true,
      [](CliCommand& command, const std::string& value) { command.platform = value; }},
+    {"--language", nullptr, true,
+     [](CliCommand& command, const std::string& value) { command.language = value; }},
     {"--release", nullptr, false,
      [](CliCommand& command, const std::string&) { command.release = true; }},
     {"--debug", nullptr, false,
@@ -120,11 +122,11 @@ const OptionSpec* FindOption(const std::string& argument) {
   return nullptr;
 }
 
-std::string PlatformUsage() {
-  return JoinStrings(BackendRegistry::Default().platforms(), ", ");
+std::string PlatformUsage(const TargetRegistry& targets) {
+  return JoinStrings(targets.platforms(), ", ");
 }
 
-std::string BuildUsage() {
+std::string BuildUsage(const TargetRegistry& targets) {
   std::ostringstream out;
   out << "用法: tiecodec [选项] <源文件...>\n\n"
       << "编译选项:\n"
@@ -144,7 +146,8 @@ std::string BuildUsage() {
       << kMaxOptimizeLevel << "，当前忽略)\n"
       << "  --disable-lint <名称>            禁用指定 lint 检查\n"
       << "  --log-level <级别>               日志级别 (debug, info, warning, error，当前忽略)\n"
-      << "  --platform <平台>                目标平台（可用: " << PlatformUsage() << "）\n"
+      << "  --platform <平台>                目标平台（可用: " << PlatformUsage(targets) << "）\n"
+      << "  --language <语言>                目标语言（默认: java）\n"
       << "  --friendly-name <模式>           符号名称模式 (random, pinyin, original，默认 random)\n"
       << "  --emit-names <路径>              生成稳定输出名并保存映射表\n"
       << "  --stable-names <路径>            读取稳定名称映射表\n"
@@ -164,9 +167,9 @@ std::string BuildUsage() {
   return out.str();
 }
 
-bool IsKnownPlatform(const std::string& platform) {
-  const std::vector<std::string>& platforms = BackendRegistry::Default().platforms();
-  return std::find(platforms.begin(), platforms.end(), platform) != platforms.end();
+bool IsKnownTarget(const TargetRegistry& targets, const std::string& platform,
+                   const std::string& language) {
+  return targets.Find(platform, language) != nullptr;
 }
 
 bool ValidateOptimizeLevel(const std::string& optimize, std::string* error) {
@@ -188,11 +191,12 @@ bool ValidateOptimizeLevel(const std::string& optimize, std::string* error) {
 
 }
 
-std::string UsageText() {
-  return BuildUsage();
+std::string UsageText(const TargetRegistry& targets) {
+  return BuildUsage(targets);
 }
 
-bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* error) {
+bool ParseCommandLine(int argc, char** argv, const TargetRegistry& targets, CliCommand* command,
+                      std::string* error) {
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
     if (argument == "--retrace") {
@@ -233,8 +237,8 @@ bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* e
     return true;
   if (!command->optimize.empty() && !ValidateOptimizeLevel(command->optimize, error))
     return false;
-  if (!IsKnownPlatform(command->platform)) {
-    *error = "不支持的目标平台: " + command->platform;
+  if (!IsKnownTarget(targets, command->platform, command->language)) {
+    *error = "不支持的目标平台或语言: " + command->platform + "/" + command->language;
     return false;
   }
   if (command->output_dir.empty()) {

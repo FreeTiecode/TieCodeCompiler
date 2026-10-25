@@ -1,6 +1,6 @@
 # tiecodec
 
-结绳（Tiecode）语言的编译器，将中文语法的 `.t` 源文件编译为可构建的 Android 工程：Java 源码、`AndroidManifest.xml`、资源文件与 `metadata.json`。标准 C++17 实现，无第三方依赖。
+结绳（Tiecode）语言的编译器，将中文语法的 `.t` 源文件编译为可构建的 Android 工程，或可运行的 JVM 桌面工程。标准 C++17 实现，无第三方依赖。
 
 结绳是一门以中文为关键字的编程语言，语法形态大致如下：
 
@@ -50,6 +50,12 @@ public class 启动窗口 extends 窗口 {
 - 工程输出：`--android.gradle` 完整 Gradle 工程、`--hard-mode` 依赖拷贝、`--android.app.config` 应用信息（名称/图标/SDK/版本）
 - 按需输出：类与成员两级裁剪，只编译实际用到的代码
 
+**JVM 桌面后端**
+
+- 复用同一套 Java 语言后端，输出纯 Java 源码、`Main.java` 启动器与 `metadata.json`
+- 入口约定：`类 启动类` + `方法 启动方法()`；`控制台.输出(...)` 输出到标准输出
+- 平台/语言正交：`--platform jvm` 与 `--platform android` 共用 Java 语言后端，平台差异由目标扩展提供
+
 **工程化**
 
 - 条件编译：`@编译条件` + `-d/--define`
@@ -70,7 +76,7 @@ cmake --build build -j
 
 ## 使用
 
-编译时需同时提供工程自身的 `.t` 文件与标准库（`stdlibs/安卓基本库`）的 `.t` 文件：
+编译时需同时提供工程自身的 `.t` 文件与标准库的 `.t` 文件：
 
 ```bash
 ./build/tiecodec --platform android --release --friendly-name original \
@@ -78,6 +84,28 @@ cmake --build build -j
     $(find stdlibs/安卓基本库/源代码 -name '*.t') \
     app.t
 ```
+
+JVM 桌面目标复用 `stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t`，并叠加 `stdlibs/JVM基本库` 的控制台/兼容声明：
+
+```bash
+./build/tiecodec --platform jvm --release --friendly-name original \
+    -o out \
+    stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t \
+    $(find stdlibs/JVM基本库/源代码 -name '*.t') \
+    app.t
+```
+
+JVM 入口示例：
+
+```
+类 启动类
+    方法 启动方法()
+        控制台.输出("你好，结绳！")
+    结束 方法
+结束 类
+```
+
+产物为 `out/src/*.java`、`out/src/Main.java` 与 `out/metadata.json`，可直接 `javac` 后运行 `Main`。
 
 输出目录结构：
 
@@ -98,7 +126,8 @@ out/
 | `-d, --define <宏>=<值>` | 定义编译条件变量 |
 | `--release` / `--debug` | 发布/调试模式（默认调试） |
 | `--friendly-name <模式>` | 符号命名：`original` / `pinyin` / `random` |
-| `--platform <平台>` | 目标平台（当前可用：`android`） |
+| `--platform <平台>` | 目标平台（`android`、`jvm`） |
+| `--language <语言>` | 目标语言（当前均为 `java`） |
 | `--android.gradle` | 输出完整 Gradle 工程 |
 | `--android.app.config <文件>` | 应用名称/图标/SDK/版本配置 |
 | `--line-map` / `--retrace` | 行号表生成与堆栈还原 |
@@ -118,8 +147,10 @@ out/
 
 | 测试 | 内容 |
 | --- | --- |
-| `SmokeTest.CompilesStarterWindow` | 使用仓库内标准库完成一次完整编译并校验产物 |
-| `LayeringTest.*` | 分层依赖约束检查，每条约束一个用例 |
+| `SmokeTest.CompilesStarterWindow` | 使用仓库内标准库完成一次完整 Android 编译并校验产物 |
+| `JvmSmokeTest.CompilesAndRunsJvmEntry` | JVM 目标编译产物，并在存在 JDK 时用 `javac`/`java` 运行 |
+| `RegistryTest.*` | 目标、注解、平台需求注册表与目标过滤 |
+| `LayeringTest.*` | 分层依赖、目标隔离与硬编码检查 |
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -139,20 +170,26 @@ bash scripts/check_style.sh
 
 ```
 src/
-├── core/        诊断、源文件抽象、常量、文本/二进制工具
-├── frontend/    词法、语法、AST
-├── analysis/    符号表、成员解析、环境契约、按需输出
-├── backend/
-│   ├── java/    Java 输出：命名、类型映射、代码发射器、异步状态机
-│   └── android/ Android 平台：清单、资源、工程文件、后端编排
-└── cli/         命令行与程序入口
+├── core/         诊断、源位置、常量、文本/文件工具
+├── ir/           前后端共享 IR：AST、符号表、语义事实、输出计划
+├── frontend/     词法、语法；解析器直接产出 IR
+├── extensions/   注解处理器接口/注册表、类型化事件、效果表、平台需求
+├── annotations/  目标无关注解实现
+├── analysis/     注解流水线、符号构建、需求校验、按需输出
+├── targets/
+│   ├── api/      目标/语言/平台接口、配置、注册表、输出
+│   ├── java/     Java 语言后端：命名、类型映射、发射器、lint、异步
+│   ├── android/  Android 平台：清单、资源、Gradle、平台扩展
+│   ├── jvm/      JVM 平台：纯 Java 工程、Main 启动器
+│   └── builtin/  内置目标与扩展注册
+└── cli/          命令行与编译流水线
 
-stdlibs/        安卓基本库源码与依赖（编译输入）
-templates/      Gradle 工程模板
-tests/          GoogleTest 单元测试
+stdlibs/         标准库源码（Android 基本库 + JVM 附加库）
+templates/       Gradle 工程模板
+tests/           GoogleTest 单元测试
 ```
 
-依赖方向自上而下单向：`cli → backend → analysis → frontend → core`，由 `LayeringTest` 约束。
+依赖方向：`core ← ir ← frontend/extensions ← analysis ← targets/api ← targets/* ← cli`。`frontend` 与 `targets` 互不依赖，由 `LayeringTest` 与硬编码守卫约束。
 
 ## 与参考实现的差异
 
@@ -166,7 +203,8 @@ tests/          GoogleTest 单元测试
 
 ## 已知限制
 
-- 目标平台目前仅支持 Android；不支持 `.tly` 文件直接输入与嵌套 TLY 实体。
+- 目标平台为 Android 与 JVM；不支持 `.tly` 文件直接输入与嵌套 TLY 实体。
+- JVM 目标当前是最小实现：复用 `JVM_基本类型.t` 与 `JVM基本库` 附加声明，组件/资源/清单能力仅 Android 提供，完整 Java 基本库与异步 UI 调度尚未接入 JVM。
 - 类型检查已覆盖常见分支（重复定义、实参个数、类型不匹配、泛型等），少量边角规则仍在补齐。
 - `--emit-names`/`--stable-names` 的映射文件采用本地格式，只保证确定性命名与稳定复用。
 - 异步 `等待` 仅在语句位置支持；`如果` 条件、遍历/分支循环内的 `等待` 会报错。行号表覆盖主类，异步上下文与泛型特化文件暂不生成映射。

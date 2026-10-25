@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 
+#include "async_analysis.h"
 #include "constants.h"
 #include "local_use.h"
 #include "symbol_resolution.h"
@@ -199,6 +200,8 @@ struct UsedMemberCollector {
 
   std::vector<std::pair<const ClassInfo*, const Member*>>* virtual_overrides = nullptr;
   std::vector<std::pair<const ClassInfo*, const Member*>> queue;
+  const SemanticModel& semantics;
+  const PlanHints& hints;
 
   void MarkUsed(const ClassInfo* owner, const Member* member) {
     if (owner == nullptr || member == nullptr)
@@ -628,14 +631,9 @@ struct UsedMemberCollector {
           MarkUsed(owner, member);
 
           if (virtual_overrides != nullptr && owner != &context) {
-            const bool is_virtual =
-                std::any_of(member->annotations.begin(), member->annotations.end(),
-                            [](const Annotation& annotation) {
-                              return annotation.name == "虚拟事件" || annotation.name == "虚拟方法";
-                            });
-            if (is_virtual && member->kind == MemberKind::kMethod) {
+            const MemberFacts* facts = semantics.FindMember(member);
+            if (facts != nullptr && facts->is_virtual && member->kind == MemberKind::kMethod)
               virtual_overrides->emplace_back(&context, member);
-            }
           }
         }
       }
@@ -675,14 +673,10 @@ struct UsedMemberCollector {
             if (definition->kind == MemberKind::kEventDefinition) {
               MarkUsed(definition_owner, definition);
 
-              for (const Annotation& annotation : definition->annotations) {
-                if (annotation.name != "属性需求")
-                  continue;
-                const std::string property = annotation.arguments.empty()
-                                                 ? std::string()
-                                                 : Unquote(annotation.arguments.front().value);
-                if (property.empty())
-                  continue;
+              const MemberFacts* definition_facts = semantics.FindMember(definition);
+              const std::string property =
+                  definition_facts == nullptr ? std::string() : definition_facts->property_demand;
+              if (!property.empty()) {
                 const ClassInfo* cursor2 = definition_owner;
                 std::set<const ClassInfo*> seen;
                 while (cursor2 != nullptr && cursor2->declaration != nullptr &&
@@ -740,8 +734,7 @@ struct UsedMemberCollector {
     }
   }
 
-  void Run(const ClassInfo* entry, const std::vector<const ClassInfo*>& emitted_classes,
-           const std::vector<RequiredMember>& required_members) {
+  void Run(const ClassInfo* entry, const std::vector<const ClassInfo*>& emitted_classes) {
     for (const ClassInfo* klass : emitted_classes) {
       if (klass == nullptr || klass->declaration == nullptr)
         continue;
@@ -751,71 +744,20 @@ struct UsedMemberCollector {
       }
     }
 
-    const auto seed_forced = [this](const ClassInfo* klass) {
-      if (klass == nullptr || klass->declaration == nullptr)
-        return;
-      for (const Member& member : klass->declaration->members) {
-        if (member.kind == MemberKind::kEventBlock) {
-          MarkUsed(klass, &member);
-        }
-        const bool forced = std::any_of(member.annotations.begin(), member.annotations.end(),
-                                        [](const Annotation& annotation) {
-                                          return annotation.name == annotation::kForcedOutput ||
-                                                 annotation.name == annotation::kThemeConfig;
-                                        });
-        if (forced)
-          MarkUsed(klass, &member);
-      }
-    };
-    for (const ClassInfo* klass : emitted_classes)
-      seed_forced(klass);
-
     for (const ClassInfo* klass : emitted_classes) {
       if (klass == nullptr || klass->declaration == nullptr)
         continue;
       for (const Member& member : klass->declaration->members) {
-        const bool component_config = std::any_of(
-            member.annotations.begin(), member.annotations.end(), [](const Annotation& annotation) {
-              return annotation.name == annotation::kComponentConfig ||
-                     annotation.name == annotation::kLayoutConfig;
-            });
-        if (component_config)
+        if (member.kind == MemberKind::kEventBlock)
           MarkUsed(klass, &member);
       }
     }
 
-    for (const ClassInfo* klass : emitted_classes) {
-      if (klass == nullptr || klass->declaration == nullptr)
-        continue;
-      for (const Member& member : klass->declaration->members) {
-        const bool virtual_method =
-            std::any_of(member.annotations.begin(), member.annotations.end(),
-                        [](const Annotation& annotation) { return annotation.name == "虚拟方法"; });
-        if (virtual_method)
-          MarkUsed(klass, &member);
-      }
-    }
+    for (const GlobalMemberRef& entry : hints.forced_members)
+      MarkUsed(entry.owner, entry.member);
+    for (const GlobalMemberRef& entry : hints.referenced_members)
+      MarkUsed(entry.owner, entry.member);
 
-    for (const RequiredMember& required : required_members) {
-      if (required.class_name == kAsyncSchedulerName)
-        continue;
-      if (required.class_name == kWindowComponentClass &&
-          required.member_name == kCreateCompletedMember)
-        continue;
-      for (const std::string& qualified_name : symbols.class_names()) {
-        if (SimpleName(qualified_name) != required.class_name)
-          continue;
-        const ClassInfo* klass = symbols.Find(qualified_name);
-        if (klass == nullptr || klass->declaration == nullptr)
-          continue;
-        const ClassInfo* owner = nullptr;
-        if (const Member* member =
-                FindMemberInChain(symbols, *klass, required.member_name, &owner)) {
-          MarkUsed(owner, member);
-        }
-        break;
-      }
-    }
     (void)entry;
 
     while (!queue.empty()) {
@@ -829,111 +771,22 @@ struct UsedMemberCollector {
 }
 
 std::set<const Member*> ComputeUsedMembers(
-    const SymbolTable& symbols, const EnvironmentContract& contract, const ClassInfo* entry,
-    const std::vector<const ClassInfo*>& emitted_classes,
+    const SymbolTable& symbols, const ClassInfo* entry,
+    const std::vector<const ClassInfo*>& emitted_classes, const SemanticModel& semantics,
+    const PlanHints& hints,
     std::vector<std::pair<const ClassInfo*, const Member*>>* virtual_overrides) {
   std::set<const Member*> used;
-  UsedMemberCollector collector{symbols, &used, virtual_overrides, {}};
-  collector.Run(entry, emitted_classes, contract.RequiredMembers());
+  UsedMemberCollector collector{symbols, &used, virtual_overrides, {}, semantics, hints};
+  collector.Run(entry, emitted_classes);
   return used;
 }
 
-namespace {
-
-void CollectAwaitExprs(const Expr* expression, std::vector<const Expr*>* awaits) {
-  if (expression == nullptr)
-    return;
-  if (expression->kind == ExprKind::kAwait)
-    awaits->push_back(expression);
-  for (const ExprPtr& child : expression->children)
-    CollectAwaitExprs(child.get(), awaits);
-}
-
-bool StatementContainsAwaitNode(const Stmt* statement);
-
-bool ExpressionListContainsAwait(const std::vector<ExprPtr>& expressions) {
-  for (const ExprPtr& expression : expressions) {
-    std::vector<const Expr*> awaits;
-    CollectAwaitExprs(expression.get(), &awaits);
-    if (!awaits.empty())
-      return true;
-  }
-  return false;
-}
-
-bool StatementContainsAwaitNode(const Stmt* statement) {
-  if (statement == nullptr)
-    return false;
-  if (ExpressionListContainsAwait(
-          {statement->expr, statement->loop_begin, statement->loop_end, statement->loop_step})) {
-    return true;
-  }
-  for (const SwitchCase& switch_case : statement->cases) {
-    if (ExpressionListContainsAwait(switch_case.values))
-      return true;
-    for (const StmtPtr& child : switch_case.body) {
-      if (StatementContainsAwaitNode(child.get()))
-        return true;
-    }
-  }
-  for (const StmtPtr& child : statement->body) {
-    if (StatementContainsAwaitNode(child.get()))
-      return true;
-  }
-  for (const StmtPtr& child : statement->else_body) {
-    if (StatementContainsAwaitNode(child.get()))
-      return true;
-  }
-  return false;
-}
-
-bool ListHasPostAwaitStatement(const std::vector<StmtPtr>& list) {
-  bool previous_has_await = false;
-  for (const StmtPtr& statement : list) {
-    if (statement == nullptr)
-      continue;
-    if (previous_has_await)
-      return true;
-    if (ListHasPostAwaitStatement(statement->body))
-      return true;
-    if (ListHasPostAwaitStatement(statement->else_body))
-      return true;
-    for (const SwitchCase& switch_case : statement->cases) {
-      if (ListHasPostAwaitStatement(switch_case.body))
-        return true;
-    }
-    previous_has_await = StatementContainsAwaitNode(statement.get());
-  }
-  return false;
-}
-
-}
-
-bool AsyncMemberUsesGlobalScheduler(const Member& member) {
-  bool is_async = false;
-  bool independent = false;
-  for (const Annotation& annotation : member.annotations) {
-    if (annotation.name != annotation::kAsyncMethod)
-      continue;
-    is_async = true;
-    for (const AnnotationArgument& argument : annotation.arguments) {
-      if (argument.name == "独立线程")
-        independent = argument.value == "真" || argument.value == "true";
-    }
-  }
-  if (!is_async)
-    return false;
-  if (!independent)
-    return true;
-  return ListHasPostAwaitStatement(member.body);
-}
-
-OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContract& contract,
-                             const ClassInfo* entry, bool designer_profile) {
+OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const ClassInfo* entry,
+                             const SemanticModel& semantics, const PlanHints& hints,
+                             bool designer_profile) {
   OutputPlan plan;
   if (entry == nullptr)
     return plan;
-  const std::vector<RequiredMember>& required_members = contract.RequiredMembers();
 
   std::set<const ClassInfo*> classes;
   const ClassInfo* current = entry;
@@ -947,8 +800,10 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
   if (designer_profile) {
     for (const auto& entry_classes : symbols.classes()) {
       const ClassInfo& klass = entry_classes.second;
-      if (klass.declaration == nullptr ||
-          !klass.declaration->HasAnnotation(annotation::kNoInstantiation))
+      if (klass.declaration == nullptr)
+        continue;
+      const ClassFacts* facts = semantics.FindClass(klass.declaration);
+      if (facts == nullptr || !facts->forbid_new)
         continue;
       bool component = false;
       const ClassInfo* cursor = &klass;
@@ -971,23 +826,8 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
     }
   }
 
-  for (const auto& entry_classes : symbols.classes()) {
-    const ClassInfo& klass = entry_classes.second;
-    if (klass.declaration == nullptr)
-      continue;
-    bool forced = false;
-    for (const Annotation& annotation : klass.declaration->annotations) {
-      if (annotation.name == "全局应用")
-        forced = true;
-      if (annotation.name != annotation::kForcedOutput)
-        continue;
-      const std::string value = annotation.TextArgument(kArgumentParameter);
-      if (!value.empty() && IsTruthyLiteral(value))
-        forced = true;
-    }
-    if (!forced)
-      continue;
-    const ClassInfo* cursor = &klass;
+  for (const ClassInfo* forced_class : hints.forced_classes) {
+    const ClassInfo* cursor = forced_class;
     while (cursor != nullptr && cursor->declaration != nullptr) {
       classes.insert(cursor);
       if (cursor->declaration->base_name.empty())
@@ -1012,117 +852,17 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
     });
     plan.virtual_overrides.clear();
     plan.members =
-        ComputeUsedMembers(symbols, contract, entry, plan.classes, &plan.virtual_overrides);
+        ComputeUsedMembers(symbols, entry, plan.classes, semantics, hints, &plan.virtual_overrides);
     {
       bool added = false;
-      for (const Member* member : plan.members) {
-        if (member == nullptr)
-          continue;
-        const bool theme = std::any_of(member->annotations.begin(), member->annotations.end(),
-                                       [](const Annotation& annotation) {
-                                         return annotation.name == annotation::kThemeConfig;
-                                       });
-        if (!theme)
-          continue;
-        const ClassInfo* owner = nullptr;
-        for (const ClassInfo* klass : plan.classes) {
-          if (klass == nullptr || klass->declaration == nullptr)
-            continue;
-          for (const Member& candidate : klass->declaration->members) {
-            if (&candidate == member)
-              owner = klass;
-          }
-          if (owner != nullptr)
-            break;
-        }
-        if (owner == nullptr)
-          continue;
-        const ClassInfo* type = symbols.Resolve(member->type_name, owner);
-        if (type == nullptr)
-          continue;
+      for (const ClassInfo* referenced : hints.referenced_classes) {
         const std::size_t before = classes.size();
-        add_with_bases(type, &classes);
+        add_with_bases(referenced, &classes);
         if (classes.size() != before)
           added = true;
       }
       if (added)
         continue;
-    }
-
-    for (const ClassInfo* klass : plan.classes) {
-      if (klass == nullptr || klass->declaration == nullptr)
-        continue;
-      for (const Member& member : klass->declaration->members) {
-        const Annotation* config = nullptr;
-        for (const Annotation& annotation : member.annotations) {
-          if (annotation.name == annotation::kComponentConfig ||
-              annotation.name == annotation::kLayoutConfig)
-            config = &annotation;
-        }
-        if (config == nullptr)
-          continue;
-        const ClassInfo* type_class = symbols.Resolve(member.type_name, klass);
-        if (type_class == nullptr)
-          continue;
-        std::string parent_value;
-        for (const AnnotationArgument& argument : config->arguments) {
-          if (argument.name == annotation::kParentLayout)
-            parent_value = argument.value;
-          if (argument.name == annotation::kRootLayout)
-            continue;
-        }
-        for (const AnnotationArgument& argument : config->arguments) {
-          std::string table = argument.value;
-          if (!argument.name.empty() && argument.name != annotation::kRootLayout &&
-              argument.name != annotation::kParentLayout) {
-            table.clear();
-          }
-          std::size_t begin = 0;
-          while (begin < table.size()) {
-            std::size_t end = table.find(',', begin);
-            if (end == std::string::npos)
-              end = table.size();
-            const std::string entry = table.substr(begin, end - begin);
-            begin = end + 1;
-            const std::size_t equals = entry.find('=');
-            if (equals == std::string::npos)
-              continue;
-            std::string key = entry.substr(0, equals);
-            while (!key.empty() && (key.front() == ' ' || key.front() == '{'))
-              key.erase(key.begin());
-            while (!key.empty() && (key.back() == ' ' || key.back() == '}'))
-              key.pop_back();
-            if (key.empty() || key == annotation::kRootLayout || key == annotation::kParentLayout)
-              continue;
-            if (key[0] == '$') {
-              std::string property_name = key.substr(1);
-              while (!property_name.empty() &&
-                     (property_name.front() == ' ' || property_name.front() == '\t')) {
-                property_name.erase(property_name.begin());
-              }
-              if (property_name.empty() || parent_value.empty())
-                continue;
-              const Member* parent_member =
-                  FindMemberInChain(symbols, *klass, parent_value, nullptr);
-              if (parent_member == nullptr)
-                continue;
-              const ClassInfo* parent_type = symbols.Resolve(parent_member->type_name, klass);
-              if (parent_type == nullptr)
-                continue;
-              const ClassInfo* owner = nullptr;
-              if (const Member* property =
-                      FindMemberInChain(symbols, *parent_type, property_name, &owner)) {
-                plan.members.insert(property);
-              }
-              continue;
-            }
-            const ClassInfo* owner = nullptr;
-            if (const Member* property = FindMemberInChain(symbols, *type_class, key, &owner)) {
-              plan.members.insert(property);
-            }
-          }
-        }
-      }
     }
 
     std::set<const ClassInfo*> references;
@@ -1175,7 +915,7 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
         changed = true;
     }
     for (const Member* member : plan.members) {
-      if (member == nullptr || !AsyncMemberUsesGlobalScheduler(*member))
+      if (member == nullptr || !AsyncMemberUsesGlobalScheduler(*member, semantics))
         continue;
       for (const std::string& class_name : symbols.class_names()) {
         if (SimpleName(class_name) != kAsyncSchedulerName)
@@ -1202,29 +942,13 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
     }
     return false;
   };
-  for (const RequiredMember& required : required_members) {
-    const ClassInfo* declaring = nullptr;
-    const Member* declaring_member = nullptr;
-    for (const std::string& qualified_name : symbols.class_names()) {
-      if (SimpleName(qualified_name) != required.class_name)
-        continue;
-      const ClassInfo* klass = symbols.Find(qualified_name);
-      if (klass == nullptr)
-        continue;
-      const ClassInfo* owner = nullptr;
-      if (const Member* member = FindMemberInChain(symbols, *klass, required.member_name, &owner)) {
-        declaring = owner;
-        declaring_member = member;
-      }
-      break;
-    }
+  const auto add_virtual_overrides = [&](const ClassInfo* declaring,
+                                         const Member* declaring_member) {
     if (declaring == nullptr || declaring_member == nullptr)
-      continue;
-    const bool is_virtual_event =
-        std::any_of(declaring_member->annotations.begin(), declaring_member->annotations.end(),
-                    [](const Annotation& annotation) { return annotation.name == "虚拟事件"; });
-    if (!is_virtual_event)
-      continue;
+      return;
+    const MemberFacts* facts = semantics.FindMember(declaring_member);
+    if (facts == nullptr || !facts->is_virtual)
+      return;
     for (const ClassInfo* klass : plan.classes) {
       if (klass == nullptr || klass->declaration == nullptr || klass == declaring)
         continue;
@@ -1252,7 +976,10 @@ OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContra
         plan.virtual_overrides.emplace_back(klass, declaring_member);
       }
     }
-  }
+  };
+
+  for (const GlobalMemberRef& entry : hints.virtual_members)
+    add_virtual_overrides(entry.owner, entry.member);
   return plan;
 }
 }

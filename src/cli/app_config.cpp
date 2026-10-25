@@ -60,7 +60,7 @@ bool FindNumber(const std::string& text, const std::string& key, int* value) {
 
 }
 
-bool LoadAppConfig(const std::string& path, BackendConfig* config, std::string* error) {
+bool LoadAppConfig(const std::string& path, TargetConfig* config, std::string* error) {
   const std::string text = ReadAll(path);
   if (text.empty()) {
     if (error != nullptr)

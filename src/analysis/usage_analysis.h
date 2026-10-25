@@ -6,27 +6,22 @@
 #include <vector>
 
 #include "ast.h"
-#include "environment_contract.h"
+#include "output_plan.h"
+#include "plan_hints.h"
+#include "semantic_model.h"
 #include "symbols.h"
 
 namespace tiecodec {
 
-struct OutputPlan {
-  std::vector<const ClassInfo*> classes;
-  std::set<const Member*> members;
-
-  std::vector<std::pair<const ClassInfo*, const Member*>> virtual_overrides;
-};
-
 std::set<const Member*> ComputeUsedMembers(
-    const SymbolTable& symbols, const EnvironmentContract& contract, const ClassInfo* entry,
-    const std::vector<const ClassInfo*>& emitted_classes,
+    const SymbolTable& symbols, const ClassInfo* entry,
+    const std::vector<const ClassInfo*>& emitted_classes, const SemanticModel& semantics,
+    const PlanHints& hints,
     std::vector<std::pair<const ClassInfo*, const Member*>>* virtual_overrides = nullptr);
 
-bool AsyncMemberUsesGlobalScheduler(const Member& member);
-
-OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const EnvironmentContract& contract,
-                             const ClassInfo* entry, bool designer_profile = false);
+OutputPlan ComputeOutputPlan(const SymbolTable& symbols, const ClassInfo* entry,
+                             const SemanticModel& semantics, const PlanHints& hints,
+                             bool designer_profile = false);
 
 }
 

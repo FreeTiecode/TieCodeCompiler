@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ast.h"
+#include "semantic_model.h"
 #include "symbols.h"
 
 namespace tiecodec {
@@ -13,11 +14,13 @@ struct Program {
   std::vector<Unit> units;
   SymbolTable symbols;
 
-  void BuildSymbols(Diagnostics* diagnostics);
+  void BuildSymbols(const SemanticModel& semantics, Diagnostics* diagnostics);
 };
 
 const ClassInfo* FindEntryClass(const SymbolTable& symbols,
                                 const std::string& name = kEntryClassName);
+
+bool ValidateSymbolPointers(const Program& program, Diagnostics* diagnostics);
 
 }
 

@@ -7,6 +7,8 @@
 
 namespace tiecodec {
 
+class TargetRegistry;
+
 struct CliCommand {
   std::vector<std::string> source_dirs;
   std::vector<std::string> sources;
@@ -16,6 +18,7 @@ struct CliCommand {
   std::string version_name;
   std::string friendly_name = "random";
   std::string platform = "android";
+  std::string language = "java";
   bool release = false;
   bool help = false;
   bool dump_ast = false;
@@ -44,9 +47,10 @@ struct CliCommand {
   bool enable_toplevel_stmt = false;
 };
 
-bool ParseCommandLine(int argc, char** argv, CliCommand* command, std::string* error);
+bool ParseCommandLine(int argc, char** argv, const TargetRegistry& targets, CliCommand* command,
+                      std::string* error);
 
-std::string UsageText();
+std::string UsageText(const TargetRegistry& targets);
 
 }
 

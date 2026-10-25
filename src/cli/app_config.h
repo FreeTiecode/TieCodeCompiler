@@ -3,11 +3,11 @@
 
 #include <string>
 
-#include "backend.h"
+#include "target_config.h"
 
 namespace tiecodec {
 
-bool LoadAppConfig(const std::string& path, BackendConfig* config, std::string* error);
+bool LoadAppConfig(const std::string& path, TargetConfig* config, std::string* error);
 
 }
 
