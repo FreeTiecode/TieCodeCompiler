@@ -19,12 +19,13 @@ namespace tiecodec {
 using namespace detail;
 std::string JavaEmitter::MemberTypeOf(const ClassInfo& klass, const std::string& name) const {
   const ClassInfo* current = &klass;
-  std::set<const ClassInfo*> visited;
-  while (current != nullptr && current->declaration != nullptr && visited.insert(current).second) {
-    for (const Member& member : current->declaration->members) {
-      if (member.name == name)
-        return member.type_name;
-    }
+  const std::size_t max_depth = symbols_.class_count() + 1;
+  for (std::size_t depth = 0; current != nullptr && current->declaration != nullptr; ++depth) {
+    if (depth == max_depth)
+      return {};
+    const auto member = current->member_by_name.find(name);
+    if (member != current->member_by_name.end())
+      return member->second->type_name;
     if (current->declaration->base_name.empty())
       break;
     current = symbols_.Resolve(current->declaration->base_name, current);
@@ -727,6 +728,35 @@ std::string JavaEmitter::EmitArrayLiteral(const ClassInfo& klass, const Expr& ex
   return result;
 }
 
+void JavaEmitter::BuildInlineTargetIndex() {
+  inline_targets_.clear();
+  const auto collect = [this](bool global_classes) {
+    for (const auto& entry : symbols_.classes()) {
+      const ClassInfo& candidate = entry.second;
+      if (candidate.is_global_class != global_classes || candidate.declaration == nullptr)
+        continue;
+      std::set<std::string> indexed;
+      for (const Member& member : candidate.declaration->members) {
+        if (CodeTextOf(member).empty())
+          continue;
+        bool has_embedded_code = false;
+        for (const Annotation& annotation : member.annotations) {
+          if (annotation.name == "嵌入式代码")
+            has_embedded_code = true;
+        }
+        if (!has_embedded_code)
+          continue;
+        if (!indexed.insert(member.name).second)
+          continue;
+        inline_targets_[member.name].push_back(InlineTarget{&candidate, &member});
+      }
+    }
+  };
+  collect(true);
+  collect(false);
+  inline_targets_ready_ = true;
+}
+
 bool JavaEmitter::TryInlineCode(const ClassInfo& klass, const Expr& call, std::string* out_text,
                                 LineRef* source_ref) {
   if (call.kind != ExprKind::kCall || call.children.empty() || call.children[0] == nullptr) {
@@ -738,10 +768,8 @@ bool JavaEmitter::TryInlineCode(const ClassInfo& klass, const Expr& call, std::s
 
   const Member* target = nullptr;
   const ClassInfo* owner = nullptr;
-  const auto find_in = [&](const ClassInfo& candidate) -> const Member* {
-    if (candidate.declaration == nullptr)
-      return nullptr;
-    for (const Member& member : candidate.declaration->members) {
+  if (klass.declaration != nullptr) {
+    for (const Member& member : klass.declaration->members) {
       if (member.name != method_name)
         continue;
       if (CodeTextOf(member).empty())
@@ -751,34 +779,20 @@ bool JavaEmitter::TryInlineCode(const ClassInfo& klass, const Expr& call, std::s
         if (annotation.name == "嵌入式代码")
           has_embedded_code = true;
       }
-      if (has_embedded_code)
-        return &member;
-    }
-    return nullptr;
-  };
-  if (const Member* member = find_in(klass)) {
-    target = member;
-    owner = &klass;
-  } else {
-    for (const auto& entry : symbols_.classes()) {
-      const ClassInfo& candidate = entry.second;
-      if (!candidate.is_global_class)
-        continue;
-      if (const Member* member = find_in(candidate)) {
-        target = member;
-        owner = &candidate;
+      if (has_embedded_code) {
+        target = &member;
+        owner = &klass;
         break;
       }
     }
-    if (target == nullptr) {
-      for (const auto& entry : symbols_.classes()) {
-        const ClassInfo& candidate = entry.second;
-        if (const Member* member = find_in(candidate)) {
-          target = member;
-          owner = &candidate;
-          break;
-        }
-      }
+  }
+  if (target == nullptr) {
+    if (!inline_targets_ready_)
+      BuildInlineTargetIndex();
+    const auto it = inline_targets_.find(method_name);
+    if (it != inline_targets_.end() && !it->second.empty()) {
+      target = it->second.front().member;
+      owner = it->second.front().owner;
     }
   }
   if (target == nullptr || owner == nullptr)

@@ -1,9 +1,11 @@
 #ifndef TIECODEC_BACKEND_JAVA_EMITTER_H
 #define TIECODEC_BACKEND_JAVA_EMITTER_H
 
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -34,7 +36,8 @@ public:
     return *this;
   }
   EmittedText& operator+=(const char* value) {
-    Add(value == nullptr ? std::string() : std::string(value));
+    if (value != nullptr)
+      Add(value, std::char_traits<char>::length(value));
     return *this;
   }
   EmittedText& operator+=(char value) {
@@ -47,7 +50,8 @@ public:
     Add(value);
   }
   void append(const char* value) {
-    Add(value == nullptr ? std::string() : std::string(value));
+    if (value != nullptr)
+      Add(value, std::char_traits<char>::length(value));
   }
   void Mark(const std::string& file, int line) {
     current_.file = file;
@@ -72,10 +76,20 @@ public:
 
 private:
   void Add(const std::string& value) {
-    for (char c : value) {
-      std::string::operator+=(c);
-      if (c == '\n')
-        line_refs_.push_back(current_);
+    Add(value.data(), value.size());
+  }
+  void Add(const char* data, std::size_t size) {
+    std::size_t start = 0;
+    while (start < size) {
+      const char* newline = static_cast<const char*>(std::memchr(data + start, '\n', size - start));
+      if (newline == nullptr) {
+        std::string::append(data + start, size - start);
+        return;
+      }
+      const std::size_t end = static_cast<std::size_t>(newline - data) + 1;
+      std::string::append(data + start, end - start);
+      line_refs_.push_back(current_);
+      start = end;
     }
   }
   std::vector<LineRef> line_refs_;
@@ -186,6 +200,7 @@ private:
                             std::string* out_text);
   bool TryInlineCode(const ClassInfo& klass, const Expr& call, std::string* out_text,
                      LineRef* source_ref = nullptr);
+  void BuildInlineTargetIndex();
   std::string SubstituteCode(const ClassInfo& klass, const std::string& code,
                              const std::map<std::string, std::string>& parameters);
   std::string StaticTypeNameOf(const ClassInfo& klass, const Expr& expression) const;
@@ -263,6 +278,12 @@ private:
   std::map<std::string, std::string> current_parameters_;
   std::vector<Parameter> current_parameter_types_;
   std::map<std::string, std::string> import_local_types_;
+  struct InlineTarget {
+    const ClassInfo* owner = nullptr;
+    const Member* member = nullptr;
+  };
+  std::unordered_map<std::string, std::vector<InlineTarget>> inline_targets_;
+  bool inline_targets_ready_ = false;
   int plus_left_escape_passes_ = 0;
   bool inline_substitution_ = false;
   bool alias_static_context_ = false;

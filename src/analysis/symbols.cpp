@@ -90,15 +90,24 @@ bool SymbolTable::AddUnit(const Unit& unit, Diagnostics* diagnostics) {
       }
     }
 
-    if (classes_.count(info.qualified_name) != 0) {
+    const auto inserted = classes_.emplace(info.qualified_name, std::move(info));
+    if (!inserted.second) {
       if (diagnostics != nullptr) {
-        diagnostics->ErrorGlobal("类重复定义: " + info.qualified_name, "enter.duplicated-class");
+        diagnostics->ErrorGlobal("类重复定义: " + inserted.first->first, "enter.duplicated-class");
       }
       continue;
     }
-    classes_[info.qualified_name] = info;
-    class_names_.push_back(info.qualified_name);
+    ClassInfo& stored = inserted.first->second;
+    for (const Member& member : class_decl.members)
+      stored.member_by_name.emplace(member.name, &member);
+    class_names_.push_back(stored.qualified_name);
+    const auto index_entry = simple_name_index_.emplace(SimpleName(stored.qualified_name), &stored);
+    if (!index_entry.second)
+      index_entry.first->second = nullptr;
+    if (stored.is_global_class)
+      global_classes_.push_back(&stored);
   }
+  global_member_index_ready_ = false;
   for (std::size_t i = 0; i < unit.classes.size(); ++i) {
     const ClassDecl& class_decl = unit.classes[i];
     const std::string qualified =
@@ -137,15 +146,27 @@ const ClassInfo* SymbolTable::Resolve(const std::string& type_name,
     }
   }
 
-  const ClassInfo* found = nullptr;
+  const auto simple = simple_name_index_.find(base);
+  return simple == simple_name_index_.end() ? nullptr : simple->second;
+}
+
+void SymbolTable::BuildGlobalMemberIndex() const {
+  global_member_index_.clear();
   for (const std::string& qualified_name : class_names_) {
-    if (SimpleName(qualified_name) != base)
+    const auto it = classes_.find(qualified_name);
+    if (it == classes_.end() || !it->second.is_global_class || it->second.declaration == nullptr)
       continue;
-    if (found != nullptr)
-      return nullptr;
-    found = Find(qualified_name);
+    for (const Member& member : it->second.declaration->members)
+      global_member_index_[member.name].push_back(GlobalMemberRef{&it->second, &member});
   }
-  return found;
+  global_member_index_ready_ = true;
+}
+
+const std::vector<GlobalMemberRef>* SymbolTable::GlobalMembers(const std::string& name) const {
+  if (!global_member_index_ready_)
+    BuildGlobalMemberIndex();
+  const auto it = global_member_index_.find(name);
+  return it == global_member_index_.end() ? nullptr : &it->second;
 }
 
 }

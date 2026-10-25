@@ -7,14 +7,15 @@ namespace tiecodec {
 const Member* FindMemberInChain(const SymbolTable& symbols, const ClassInfo& klass,
                                 const std::string& name, const ClassInfo** owner) {
   const ClassInfo* current = &klass;
-  std::set<const ClassInfo*> visited;
-  while (current != nullptr && current->declaration != nullptr && visited.insert(current).second) {
-    for (const Member& member : current->declaration->members) {
-      if (member.name != name)
-        continue;
+  const std::size_t max_depth = symbols.class_count() + 1;
+  for (std::size_t depth = 0; current != nullptr && current->declaration != nullptr; ++depth) {
+    if (depth == max_depth)
+      return nullptr;
+    const auto member = current->member_by_name.find(name);
+    if (member != current->member_by_name.end()) {
       if (owner != nullptr)
         *owner = current;
-      return &member;
+      return member->second;
     }
     if (current->declaration->base_name.empty())
       break;
@@ -25,23 +26,20 @@ const Member* FindMemberInChain(const SymbolTable& symbols, const ClassInfo& kla
 
 const Member* FindGlobalClassMember(const SymbolTable& symbols, const ClassInfo& context,
                                     const std::string& name, const ClassInfo** owner) {
-  for (const std::string& qualified_name : symbols.class_names()) {
-    const ClassInfo* candidate = symbols.Find(qualified_name);
-    if (candidate == nullptr || candidate == &context || !candidate->is_global_class)
+  const std::vector<GlobalMemberRef>* entries = symbols.GlobalMembers(name);
+  if (entries == nullptr)
+    return nullptr;
+  for (const GlobalMemberRef& entry : *entries) {
+    if (entry.owner == &context)
       continue;
-    if (candidate->declaration == nullptr)
+    const Member& member = *entry.member;
+    if (member.kind != MemberKind::kMethod && member.kind != MemberKind::kVariable &&
+        member.kind != MemberKind::kConstant && member.kind != MemberKind::kPropertyRead) {
       continue;
-    for (const Member& member : candidate->declaration->members) {
-      if (member.name != name)
-        continue;
-      if (member.kind != MemberKind::kMethod && member.kind != MemberKind::kVariable &&
-          member.kind != MemberKind::kConstant && member.kind != MemberKind::kPropertyRead) {
-        continue;
-      }
-      if (owner != nullptr)
-        *owner = candidate;
-      return &member;
     }
+    if (owner != nullptr)
+      *owner = entry.owner;
+    return &member;
   }
   return nullptr;
 }
@@ -50,10 +48,7 @@ const Member* ResolveGlobalMethod(const SymbolTable& symbols, const ClassInfo& c
                                   const std::string& name, const ClassInfo** owner) {
   if (const Member* member = FindMemberInChain(symbols, context, name, owner))
     return member;
-  for (const std::string& qualified_name : symbols.class_names()) {
-    const ClassInfo* candidate = symbols.Find(qualified_name);
-    if (candidate == nullptr || !candidate->is_global_class)
-      continue;
+  for (const ClassInfo* candidate : symbols.global_classes()) {
     if (const Member* member = FindMemberInChain(symbols, *candidate, name, owner))
       return member;
   }

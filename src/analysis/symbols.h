@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ast.h"
@@ -14,6 +15,7 @@ namespace tiecodec {
 
 struct ClassInfo {
   const ClassDecl* declaration = nullptr;
+  std::unordered_map<std::string, const Member*> member_by_name;
   std::string qualified_name;
   std::string package_name;
 
@@ -35,6 +37,11 @@ struct ClassInfo {
   std::string BaseQualifiedName() const;
 };
 
+struct GlobalMemberRef {
+  const ClassInfo* owner = nullptr;
+  const Member* member = nullptr;
+};
+
 class SymbolTable {
 public:
   bool AddUnit(const Unit& unit, Diagnostics* diagnostics);
@@ -50,10 +57,23 @@ public:
   const std::map<std::string, ClassInfo>& classes() const {
     return classes_;
   }
+  const std::vector<const ClassInfo*>& global_classes() const {
+    return global_classes_;
+  }
+  const std::vector<GlobalMemberRef>* GlobalMembers(const std::string& name) const;
+  std::size_t class_count() const {
+    return class_names_.size();
+  }
 
 private:
+  void BuildGlobalMemberIndex() const;
+
   std::map<std::string, ClassInfo> classes_;
   std::vector<std::string> class_names_;
+  std::map<std::string, const ClassInfo*> simple_name_index_;
+  std::vector<const ClassInfo*> global_classes_;
+  mutable std::unordered_map<std::string, std::vector<GlobalMemberRef>> global_member_index_;
+  mutable bool global_member_index_ready_ = false;
   int global_base_count_ = 0;
   std::map<std::string, std::string> package_output_names_;
 };
