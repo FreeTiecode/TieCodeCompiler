@@ -186,7 +186,7 @@ Android（完整标准库）：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform android --release --friendly-name original \
+   ./build/tiec --platform android --release --friendly-name original \
        -o out \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') \
        app.t
@@ -195,7 +195,7 @@ Android + Gradle：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform android --release --android.gradle \
+   ./build/tiec --platform android --release --android.gradle \
        --friendly-name original -o out \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') \
        app.t
@@ -204,7 +204,7 @@ JVM：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform jvm --release --friendly-name original \
+   ./build/tiec --platform jvm --release --friendly-name original \
        -o out \
        stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t \
        $(find stdlibs/JVM基本库/源代码 -name '*.t') \
@@ -214,24 +214,24 @@ JVM：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform android --check \
+   ./build/tiec --platform android --check \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') app.t
-   ./build/tiecodec --platform android --check --dump-ast \
+   ./build/tiec --platform android --check --dump-ast \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') app.t
 
 条件编译：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform android --release -d 自定义开关=真 -o out ...源文件...
+   ./build/tiec --platform android --release -d 自定义开关=真 -o out ...源文件...
 
 行号表与还原：
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform jvm --line-map out/map.tsm -o out ...源文件...
-   ./build/tiecodec --retrace out/map.tsm StackTrace.txt 42
-   ./build/tiecodec --retrace-batch requests.json
+   ./build/tiec --platform jvm --line-map out/map.tsm -o out ...源文件...
+   ./build/tiec --retrace out/map.tsm StackTrace.txt 42
+   ./build/tiec --retrace-batch requests.json
 
 与文档其他章节的关系
 --------------------------------------------------------------------------------

@@ -21,7 +21,7 @@ JVM 桌面目标不复制整套基本库，直接复用：
 编译命令：
 
 ```bash
-./build/tiecodec --platform jvm --release --friendly-name original -o out \
+./build/tiec --platform jvm --release --friendly-name original -o out \
     stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t \
     $(find stdlibs/JVM基本库/源代码 -name '*.t') \
     app.t

@@ -1,6 +1,6 @@
 # FreeTiecodec
 
-FreeTiecodec（FTC）是结绳（Tiecode）语言的编译器，使用 C++17 实现。项目名为 FreeTiecodec（FTC），构建产物/可执行文件仍名为 `tiecodec`。
+FreeTiecodec（FTC）是结绳（Tiecode）语言的编译器，使用 C++17 实现。项目名为 FreeTiecodec（FTC），构建产物/可执行文件名为 `tiec`。
 
 ## 概览
 
@@ -38,7 +38,7 @@ bash scripts/check_style.sh
 Android：
 
 ```bash
-./build/tiecodec --platform android --release --friendly-name original \
+./build/tiec --platform android --release --friendly-name original \
     -o out \
     $(find stdlibs/安卓基本库/源代码 -name '*.t') \
     app.t
@@ -47,7 +47,7 @@ Android：
 JVM：
 
 ```bash
-./build/tiecodec --platform jvm --release --friendly-name original \
+./build/tiec --platform jvm --release --friendly-name original \
     -o out \
     stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t \
     $(find stdlibs/JVM基本库/源代码 -name '*.t') \

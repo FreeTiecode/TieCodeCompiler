@@ -115,9 +115,8 @@ class JvmSmokeTest : public ::testing::Test {
 protected:
   void SetUp() override {
     const char* from_env = std::getenv(kCompilerEnvVar);
-    compiler_ = from_env != nullptr && *from_env != '\0'
-                    ? fs::path(from_env)
-                    : fs::path(TIECODEC_BINARY_DIR) / "tiecodec";
+    compiler_ = from_env != nullptr && *from_env != '\0' ? fs::path(from_env)
+                                                         : fs::path(TIECODEC_BINARY_DIR) / "tiec";
     ASSERT_TRUE(fs::is_regular_file(compiler_)) << "缺少编译器: " << compiler_;
 
     stdlib_ = fs::path(TIECODEC_SOURCE_DIR) / "stdlibs" / "安卓基本库" / "源代码" / "Java" /

@@ -130,7 +130,7 @@ std::string PlatformUsage(const TargetRegistry& targets) {
 
 std::string BuildUsage(const TargetRegistry& targets) {
   std::ostringstream out;
-  out << "用法: tiecodec [选项] <源文件...>\n\n"
+  out << "用法: tiec [选项] <源文件...>\n\n"
       << "编译选项:\n"
       << "  -o, --output <目录>              设置输出目录\n"
       << "  -p, --package <包名>             设置默认包名\n"

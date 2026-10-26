@@ -120,7 +120,7 @@ target_include_directories(tiecodec_builtin
 target_link_libraries(tiecodec_builtin PUBLIC tiecodec_java tiecodec_android tiecodec_jvm
   tiecodec_annotations tiecodec_extensions)
 
-add_executable(tiecodec
+add_executable(tiec
   src/cli/main.cpp
   src/cli/command_line.cpp
   src/cli/app_config.cpp
@@ -130,8 +130,8 @@ add_executable(tiecodec
   src/cli/source_loader.cpp
   src/cli/console_reporter.cpp
   src/cli/compilation_session.cpp)
-target_include_directories(tiecodec PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cli")
-target_link_libraries(tiecodec PRIVATE tiecodec_builtin tiecodec_analysis tiecodec_frontend)
+target_include_directories(tiec PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cli")
+target_link_libraries(tiec PRIVATE tiecodec_builtin tiecodec_analysis tiecodec_frontend)
 
 enable_testing()
 
@@ -159,5 +159,5 @@ target_compile_definitions(tiecodec_tests
   PRIVATE TIECODEC_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
 gtest_discover_tests(tiecodec_tests
-  PROPERTIES ENVIRONMENT "TIECODEC_TEST_COMPILER=$<TARGET_FILE:tiecodec>"
+  PROPERTIES ENVIRONMENT "TIECODEC_TEST_COMPILER=$<TARGET_FILE:tiec>"
   DISCOVERY_MODE PRE_TEST)
