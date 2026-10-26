@@ -318,6 +318,8 @@ struct UsedMemberCollector {
           return builtin_type::kDecimal;
         return builtin_type::kInteger;
       }
+      case ExprKind::kThis:
+        return context.qualified_name;
       case ExprKind::kFieldAccess: {
         const ClassInfo* receiver =
             ReceiverClassOf(context, locals,
@@ -423,7 +425,9 @@ struct UsedMemberCollector {
         if (expression->children.empty() || expression->children[0] == nullptr)
           break;
         const Expr* receiver = expression->children[0].get();
-        const ClassInfo* receiver_class = ReceiverClassOf(context, locals, receiver);
+        const ClassInfo* receiver_class = receiver->kind == ExprKind::kThis
+                                              ? &context
+                                              : ReceiverClassOf(context, locals, receiver);
         if (receiver_class == nullptr && receiver->kind == ExprKind::kIdentifier) {
           receiver_class = symbols.Resolve(receiver->text, &context);
         }
@@ -489,11 +493,18 @@ struct UsedMemberCollector {
           if (callee->kind == ExprKind::kIdentifier) {
             member = ResolveGlobalMethod(symbols, context, callee->text, &owner);
           } else if (callee->kind == ExprKind::kFieldAccess && !callee->children.empty() &&
-                     callee->children[0] != nullptr &&
-                     callee->children[0]->kind == ExprKind::kIdentifier) {
-            const ClassInfo* receiver = ReceiverClassOf(context, locals, callee->children[0].get());
-            if (receiver == nullptr) {
-              receiver = symbols.Resolve(callee->children[0]->text, &context);
+                     callee->children[0] != nullptr) {
+            const Expr* receiver_expr = callee->children[0].get();
+            const ClassInfo* receiver = nullptr;
+            if (receiver_expr->kind == ExprKind::kThis) {
+              receiver = &context;
+            } else if (receiver_expr->kind == ExprKind::kIdentifier) {
+              receiver = ReceiverClassOf(context, locals, receiver_expr);
+              if (receiver == nullptr) {
+                receiver = symbols.Resolve(receiver_expr->text, &context);
+              }
+            } else {
+              receiver = ReceiverClassOf(context, locals, receiver_expr);
             }
             if (receiver != nullptr) {
               member = LookupMemberOfKind(*receiver, callee->text, MemberKind::kMethod, &owner);
