@@ -34,10 +34,10 @@ FTC 的入口是 ``CompilationSession``\ ；CLI 只负责把选项转成 ``CliCo
      - 递归扫描目录下 ``.t``\ ；可重复。
    * - ``--platform <平台>``
      - ``android``
-     - ``android``\ 或 ``jvm``\ 。
+     - ``android``\ 、``jvm``\ 或 ``cxx``\ 。
    * - ``--language <语言>``
      - ``java``
-     - 当前只有 ``java``\ 。
+     - ``java``\ （``android``/``jvm``\ ）或 ``cxx``\ （``cxx``\ 平台需显式传 ``--language cxx``\ ）。
    * - ``--release``/ ``--debug``
      - ``--debug``
      - 发布/调试；影响 ``调试版``/``正式版``\ 定义与清单 ``debuggable``\ 。

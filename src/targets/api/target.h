@@ -29,6 +29,7 @@ struct GeneratedSource {
   std::string content;
   std::vector<LineRef> line_refs;
   const ClassInfo* klass = nullptr;
+  std::string directory;
 };
 
 struct GeneratedProgram {

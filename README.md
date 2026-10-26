@@ -7,8 +7,9 @@ FreeTiecodec（FTC）是结绳（Tiecode）语言的编译器，使用 C++17 实
 - 输入：中文关键字的 `.t` 源文件与标准库 `.t` 文件。
 - Android 目标：Java 源码、`AndroidManifest.xml`、资源、`metadata.json`，可选完整 Gradle 工程。
 - JVM 目标：纯 Java 源码、`Main.java`、`metadata.json`。
+- C++ 目标：`src/` 下的 C++17 类头/实现文件、`main.cpp`、`CMakeLists.txt`、`commands-g++.sh`/`msvc.bat` 编译脚本、运行时源文件与 `metadata.json`。
 - 默认修正参考实现的若干产物问题（泛型命名、运算符方法名、内联 code 分号等）；`--disable-ftc-features` 用于兼容性对照。
-- Android 入口为 `启动窗口`；JVM 入口为 `类 启动类` + `方法 启动方法()`。
+- Android 入口为 `启动窗口`；JVM 与 C++ 入口为 `类 启动类` + `方法 启动方法()`。
 
 完整的语言规范、类型映射、AST/Pass、代码生成和平台产出见 [docs/index.rst](docs/index.rst)。
 
@@ -54,6 +55,18 @@ JVM：
     app.t
 ```
 
+C++：
+
+```bash
+./build/tiec --platform cxx --language cxx --release --friendly-name original \
+    -o out \
+    $(find stdlibs/CXX基本库/源代码 -name '*.t') \
+    app.t
+cmake -S out/src -B out/src/build && cmake --build out/src/build && ./out/src/build/main
+```
+
+C++ 产物的 `src/main.cpp` 在事件循环中调度入口；命令行程序需在 `启动方法` 末尾调用基本库 `退出程序()` 结束循环，常驻应用（游戏/窗口）则由事件消息维持运行。
+
 命令行完整选项见 [docs/appendix/cli.rst](docs/appendix/cli.rst)，语言与目标产出见 [docs/index.rst](docs/index.rst)。
 
 ## 构建并查看文档
@@ -79,6 +92,7 @@ python3 -m venv .venv
 - [语言规范](docs/language/lexical.rst)：词法、EBNF、类型与转换、脱糖、语义。
 - [编译器实现](docs/compiler/pipeline.rst)：Pass 管线、AST/IR、代码生成、注解。
 - [平台产出](docs/platform/android.rst)：Android 清单/资源/Gradle 与 JVM 启动器。
+- [C++ 产出](docs/platform/cxx.rst)：src/ 工程布局、运行时集成、与参考产物的差异与兼容开关。
 - [限制与兼容开关](docs/appendix/divergences.rst)：剩余限制、设计范围、FTC 默认修正与 `--disable-ftc-features`。
 - [构建与验证](docs/appendix/verification.rst)：文档依赖、测试与端到端验证。
 

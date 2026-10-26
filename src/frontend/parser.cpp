@@ -637,7 +637,10 @@ void Parser::ParseMethod(ClassDecl* class_decl, Member& member, const std::strin
     return;
   }
 
-  ParseBlock(&member.body, terminator);
+  std::vector<Annotation> inline_annotations;
+  ParseBlock(&member.body, terminator, &inline_annotations);
+  for (Annotation& annotation : inline_annotations)
+    member.annotations.push_back(std::move(annotation));
   member.end_line = static_cast<int>(last_position_.line) + 1;
   class_decl->members.push_back(std::move(member));
 }
@@ -722,7 +725,8 @@ std::string Parser::ParseTypeName() {
   return name;
 }
 
-void Parser::ParseBlock(std::vector<StmtPtr>* body, const std::string& terminator) {
+void Parser::ParseBlock(std::vector<StmtPtr>* body, const std::string& terminator,
+                        std::vector<Annotation>* inline_annotations) {
   while (!IsAtEnd()) {
     if (Check("结束") && Peek(1).kind == TokenKind::kIdentifier && Peek(1).text == terminator) {
       Next();
@@ -732,7 +736,7 @@ void Parser::ParseBlock(std::vector<StmtPtr>* body, const std::string& terminato
     if (Check("结束")) {
       return;
     }
-    StmtPtr statement = ParseStatement();
+    StmtPtr statement = ParseStatement(inline_annotations);
     if (statement != nullptr) {
       body->push_back(std::move(statement));
     } else {
@@ -752,7 +756,7 @@ bool Parser::IsStatementBoundary() {
   return false;
 }
 
-StmtPtr Parser::ParseStatement() {
+StmtPtr Parser::ParseStatement(std::vector<Annotation>* inline_annotations) {
   const SourcePosition position = Peek().position;
 
   if (Peek().kind == TokenKind::kCodeBlock) {
@@ -769,10 +773,13 @@ StmtPtr Parser::ParseStatement() {
   if (Check("@")) {
     std::vector<Annotation> annotations;
     ParseAnnotations(&annotations);
+    if (inline_annotations != nullptr) {
+      for (Annotation& annotation : annotations)
+        inline_annotations->push_back(std::move(annotation));
+    }
     if (IsAtEnd())
       return nullptr;
-    StmtPtr statement = ParseStatement();
-    return statement;
+    return ParseStatement(inline_annotations);
   }
 
   if (Match(";"))

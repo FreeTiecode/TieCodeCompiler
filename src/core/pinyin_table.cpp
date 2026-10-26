@@ -1,5 +1,9 @@
 #include "pinyin_table.h"
 
+#include <cctype>
+#include <string>
+#include <vector>
+
 #include <cstdint>
 #include <cstdio>
 
@@ -5365,6 +5369,140 @@ std::string ResourceNameOf(const std::string& identifier) {
 
 std::uint32_t ResourceNameHash(const std::string& text) {
   return Fnv1a32(text);
+}
+
+std::vector<std::string> IdentifierTokens(const std::string& identifier) {
+  std::vector<std::string> tokens;
+  std::size_t index = 0;
+  while (index < identifier.size()) {
+    const unsigned char lead = static_cast<unsigned char>(identifier[index]);
+    if (lead < 0x80) {
+      if (std::isalnum(lead) != 0) {
+        tokens.emplace_back(1, static_cast<char>(lead));
+      }
+      ++index;
+      continue;
+    }
+    std::size_t length = 1;
+    if ((lead & 0xE0u) == 0xC0u)
+      length = 2;
+    else if ((lead & 0xF0u) == 0xE0u)
+      length = 3;
+    else if ((lead & 0xF8u) == 0xF0u)
+      length = 4;
+    char32_t codepoint = 0;
+    if (length == 2)
+      codepoint = lead & 0x1Fu;
+    else if (length == 3)
+      codepoint = lead & 0x0Fu;
+    else if (length == 4)
+      codepoint = lead & 0x07u;
+    ++index;
+    for (std::size_t i = 1; i < length && index < identifier.size(); ++i, ++index) {
+      codepoint = (codepoint << 6) | (static_cast<unsigned char>(identifier[index]) & 0x3Fu);
+    }
+    if (const char* pinyin = PinyinFor(codepoint)) {
+      tokens.emplace_back(pinyin);
+    } else {
+      tokens.emplace_back(1, 'x');
+    }
+  }
+  return tokens;
+}
+
+std::string CamelCase(const std::string& identifier) {
+  std::string result;
+  for (std::string token : IdentifierTokens(identifier)) {
+    if (token.empty())
+      continue;
+    token[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(token[0])));
+    result += token;
+  }
+  return result.empty() ? identifier : result;
+}
+
+std::string LowerCamelCase(const std::string& identifier) {
+  std::string result;
+  bool first_segment = true;
+  std::size_t begin = 0;
+  while (begin <= identifier.size()) {
+    const std::size_t underscore = identifier.find('_', begin);
+    const std::string segment = identifier.substr(
+        begin, underscore == std::string::npos ? std::string::npos : underscore - begin);
+    if (!first_segment)
+      result.push_back('_');
+    std::string segment_result;
+    bool first_token = true;
+    for (std::string token : IdentifierTokens(segment)) {
+      if (token.empty())
+        continue;
+      if (first_token) {
+        if (first_segment) {
+          for (char& c : token) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          }
+        } else {
+          token[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(token[0])));
+        }
+        first_token = false;
+      } else {
+        token[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(token[0])));
+      }
+      segment_result += token;
+    }
+    result += segment_result.empty() ? segment : segment_result;
+    first_segment = false;
+    if (underscore == std::string::npos)
+      break;
+    begin = underscore + 1;
+  }
+  return result.empty() ? identifier : result;
+}
+
+std::string SegmentPascal(const std::string& identifier) {
+  std::string result;
+  std::size_t begin = 0;
+  bool first = true;
+  while (begin <= identifier.size()) {
+    const std::size_t underscore = identifier.find('_', begin);
+    const std::string segment = identifier.substr(
+        begin, underscore == std::string::npos ? std::string::npos : underscore - begin);
+    if (!first)
+      result.push_back('_');
+    result += CamelCase(segment);
+    first = false;
+    if (underscore == std::string::npos)
+      break;
+    begin = underscore + 1;
+  }
+  return result.empty() ? identifier : result;
+}
+
+std::string PackageInitials(const std::string& segment) {
+  std::string result;
+  for (const std::string& token : IdentifierTokens(segment)) {
+    if (token.empty())
+      continue;
+    result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(token[0]))));
+  }
+  return result.empty() ? segment : result;
+}
+
+std::string TransformPackage(const std::string& package) {
+  std::string result;
+  std::size_t begin = 0;
+  while (begin <= package.size()) {
+    const std::size_t dot = package.find('.', begin);
+    const std::string segment =
+        package.substr(begin, dot == std::string::npos ? std::string::npos : dot - begin);
+    if (!result.empty())
+      result.push_back('.');
+    result += PackageInitials(segment);
+    if (dot == std::string::npos)
+      break;
+    begin = dot + 1;
+  }
+  return result;
 }
 
 }

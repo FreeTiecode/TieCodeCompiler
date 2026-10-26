@@ -64,7 +64,8 @@
 
 - ``tests/``\ 使用 GoogleTest；CMake 找不到系统 GTest 时会 FetchContent。
 - JVM smoke test 在存在 ``javac``/``java``\ 时执行编译与运行；否则跳过运行部分。
-- ``tests/``\ 中有 Android/JVM/注册表/分层测试；语言特性 fixture 还可能位于 ``tools/validation``\ （若工作树保留）。
+- C++ smoke test 在存在 ``cmake`` 与 C++ 编译器时执行端到端构建与运行\ （``tests/cxx_smoke_test.cpp``\ ）；否则跳过运行部分。
+- ``tests/``\ 中有 Android/JVM/C++/注册表/分层测试；语言特性 fixture 还可能位于 ``tools/validation``\ （若工作树保留）。
 
 JVM 端到端样例
 --------------------------------------------------------------------------------
@@ -98,6 +99,42 @@ JVM 端到端样例
    fi
 
 期望：输出 ``你好，结绳！``\ ；``Main.java``\ 包含入口类实例化与 ``启动方法``\ 调用；``metadata.json``\ 的 ``mainClass``\ 为 ``Main``\ 。
+
+C++ 端到端样例
+--------------------------------------------------------------------------------
+
+.. code-block:: bash
+
+   tmp=$(mktemp -d)
+   cat > "$tmp/app.t" <<'EOF'
+   类 启动类
+       方法 启动方法()
+           @导入头文件("<iostream>")
+           code std::cout << "你好，C++！" << std::endl;
+           退出程序()
+       结束 方法
+   结束 类
+   EOF
+
+   ./build/tiec --platform cxx --language cxx --release --friendly-name original \
+       -o "$tmp/out" \
+       $(find stdlibs/CXX基本库/源代码 -name '*.t') \
+       "$tmp/app.t"
+
+   test -f "$tmp/out/src/启动类.h"
+   test -f "$tmp/out/src/启动类.cpp"
+   test -f "$tmp/out/src/main.cpp"
+   test -f "$tmp/out/src/CMakeLists.txt"
+   test -f "$tmp/out/src/tie_cxx_foundation.h"
+   test -f "$tmp/out/metadata.json"
+
+   if command -v cmake >/dev/null 2>&1; then
+     cmake -S "$tmp/out/src" -B "$tmp/build" > /dev/null
+     cmake --build "$tmp/build" > /dev/null
+     "$tmp/build/main"
+   fi
+
+期望：输出 ``你好，C++！``\ ；``src/main.cpp``\ 使用 ``GetMainLooper()`` 调度入口；``metadata.json``\ 的 ``entry``\ 为 ``结绳::中文::启动类``\ 。兼容模式（``--disable-ftc-features``\ ）不复刻参考的不可编译形态，改为逐项 ``compat.ftc.*`` 报错\ ，清单见 :ref:`cxx-compat`。
 
 Android 端到端样例
 --------------------------------------------------------------------------------

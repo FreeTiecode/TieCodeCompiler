@@ -1,12 +1,13 @@
-#ifndef TIECODEC_BACKEND_JAVA_LINE_MAP_H
-#define TIECODEC_BACKEND_JAVA_LINE_MAP_H
+#ifndef TIECODEC_TARGETS_API_LINE_MAP_H
+#define TIECODEC_TARGETS_API_LINE_MAP_H
 
 #include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "java_emitter.h"
+#include "emitted_text.h"
+#include "target.h"
 
 namespace tiecodec {
 

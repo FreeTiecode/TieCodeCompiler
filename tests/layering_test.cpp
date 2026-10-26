@@ -174,7 +174,8 @@ TEST_F(LayeringTest, AnalysisDoesNotDependOnTargets) {
 }
 
 TEST_F(LayeringTest, TargetsDoNotDependOnFrontendOrAnalysis) {
-  const std::vector<std::string> directories = {"targets/api", "targets/java", "targets/android",
+  const std::vector<std::string> directories = {"targets/api", "targets/java",
+                                                "targets/cxx", "targets/android",
                                                 "targets/jvm", "targets/builtin"};
   const std::vector<std::string> forbidden = {"lexer.h",
                                               "parser.h",
@@ -205,6 +206,20 @@ TEST_F(LayeringTest, JavaTargetHasNoAndroidLiterals) {
       << "targets/java 仍包含 Android 字面量";
 }
 
+TEST_F(LayeringTest, ApiLayerDoesNotDependOnConcreteLanguages) {
+  const Layer layer{"targets/api",
+                    {"java_names.h", "java_type_mapper.h", "java_emitter.h", "cxx_names.h",
+                     "cxx_type_mapper.h", "cxx_emitter.h"}};
+  EXPECT_EQ(Violations(src_root(), layer), "") << "targets/api 反向依赖了具体语言";
+}
+
+TEST_F(LayeringTest, CxxTargetDoesNotDependOnOtherLanguages) {
+  const Layer layer{"targets/cxx",
+                    {"java_emitter.h", "java_names.h", "java_type_mapper.h",
+                     "android_platform_backend.h", "jvm_platform_backend.h"}};
+  EXPECT_EQ(Violations(src_root(), layer), "") << "targets/cxx 依赖了其他语言目标";
+}
+
 TEST_F(LayeringTest, UsageAnalysisHasNoAnnotationNames) {
   EXPECT_EQ(TextViolations(src_root() / "analysis" / "usage_analysis.cpp",
                            {"annotation.name", "annotation::"}),
@@ -216,7 +231,9 @@ TEST_F(LayeringTest, CliDoesNotDependOnTargetInternals) {
   const Layer layer{
       "cli",
       {"java_emitter.h", "java_expressions.h", "java_imports.h", "helpers.h",
-       "android_platform_backend.h", "jvm_platform_backend.h", "java_language_backend.h"}};
+       "android_platform_backend.h", "jvm_platform_backend.h", "java_language_backend.h",
+       "cxx_emitter.h", "cxx_names.h", "cxx_type_mapper.h", "cxx_platform_backend.h",
+       "cxx_language_backend.h", "cxx_effect_types.h", "cxx_language_constants.h"}};
   EXPECT_EQ(Violations(src_root(), layer), "") << "cli 依赖了目标内部实现";
 }
 

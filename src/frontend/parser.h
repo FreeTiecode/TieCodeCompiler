@@ -53,8 +53,9 @@ private:
   bool ParseAnnotation(Annotation* annotation);
   bool ParseAnnotations(std::vector<Annotation>* annotations);
 
-  void ParseBlock(std::vector<StmtPtr>* body, const std::string& terminator);
-  StmtPtr ParseStatement();
+  void ParseBlock(std::vector<StmtPtr>* body, const std::string& terminator,
+                  std::vector<Annotation>* inline_annotations = nullptr);
+  StmtPtr ParseStatement(std::vector<Annotation>* inline_annotations = nullptr);
   StmtPtr ParseIf();
 
   StmtPtr ParseIfConditional();

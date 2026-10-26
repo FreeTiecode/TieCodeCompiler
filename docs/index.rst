@@ -9,19 +9,20 @@ FTC (FreeTiecodec) 语言与编译器规范
 
    **实现基线**\ ：``a0a48e6``\ （2026-10-26）。本文档描述该提交及其当前工作树的实际行为；后续提交可能改变词法、代码生成或平台产出。若文档与源码冲突，以源码为准并应同步修订本文档。
 
-当前编译器只有 **Java 语言后端**\ ，面向两个平台：
+当前编译器有两个语言后端，共面向三个平台：
 
 - ``android``\ ：Android 工程（Java 源码、清单、资源、可选 Gradle 工程）。
 - ``jvm``\ ：纯 Java 桌面工程（Java 源码、``Main.java``\ 、``metadata.json``\ ）。
+- ``cxx``\ ：C++17 工程（``src/`` 下的类头/实现文件、``main.cpp``\ 、``CMakeLists.txt``\ 、编译脚本、``metadata.json``\ ）。
 
-没有 C++ 后端。源语言的遍历循环（``循环(集合 -> 项)``\ ）译为 Java 增强 ``for``\ ，由 JVM 的迭代器协议实现；它不是索引循环，也不是 C++ range-for。
+源语言的遍历循环（``循环(集合 -> 项)``\ ）在 Java 后端译为增强 ``for``\ ，由 JVM 的迭代器协议实现；C++ 后端发射 range-for\ （``for (const 元素& 项 : *列表)``\ ）。C++ 后端的产出形态、兼容开关与已知缺口见 :doc:`platform/cxx`。
 
 阅读路径
 --------------------------------------------------------------------------------
 
 - **语言使用者**\ ：从 :doc:`language/lexical` 开始，依次阅读 :doc:`language/grammar`、:doc:`language/types`、:doc:`language/desugaring`、:doc:`language/semantics`。
 - **编译器开发者**\ ：从 :doc:`compiler/ast` 开始，依次阅读 :doc:`compiler/pipeline`、:doc:`compiler/codegen`、:doc:`compiler/annotations`。
-- **平台接入者**\ ：阅读 :doc:`platform/android`、:doc:`platform/jvm`，以及 :doc:`appendix/cli`。
+- **平台接入者**\ ：阅读 :doc:`platform/android`、:doc:`platform/jvm`、:doc:`platform/cxx`，以及 :doc:`appendix/cli`。
 - **审查与验证**\ ：直接阅读 :doc:`appendix/divergences` 与 :doc:`appendix/verification`。
 
 状态标记
@@ -76,6 +77,7 @@ FTC (FreeTiecodec) 语言与编译器规范
 
    platform/android
    platform/jvm
+   platform/cxx
 
 .. toctree::
    :maxdepth: 2

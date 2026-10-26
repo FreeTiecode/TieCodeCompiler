@@ -14,7 +14,8 @@ add_library(tiecodec_core STATIC
   src/core/source.cpp
   src/core/text_util.cpp
   src/core/file_search.cpp
-  src/core/json_util.cpp)
+  src/core/json_util.cpp
+  src/core/pinyin_table.cpp)
 target_include_directories(tiecodec_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/core")
 target_compile_definitions(tiecodec_core
   PUBLIC TIECODEC_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates")
@@ -61,7 +62,9 @@ target_include_directories(tiecodec_analysis PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(tiecodec_analysis PUBLIC tiecodec_extensions tiecodec_ir)
 
 add_library(tiecodec_targets_api STATIC
+  src/targets/api/line_map.cpp
   src/targets/api/output_sink.cpp
+  src/targets/api/emission_pipeline.cpp
   src/targets/api/target_registry.cpp)
 target_include_directories(tiecodec_targets_api
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/targets/api")
@@ -78,9 +81,7 @@ add_library(tiecodec_java STATIC
   src/targets/java/java_generics.cpp
   src/targets/java/java_imports.cpp
   src/targets/java/java_support.cpp
-  src/targets/java/pinyin_table.cpp
-  src/targets/java/line_map.cpp
-  src/targets/java/java_language_backend.cpp
+    src/targets/java/java_language_backend.cpp
   src/targets/java/annotations/java_annotations.cpp
   src/targets/java/requirements/java_requirements.cpp)
 target_include_directories(tiecodec_java
@@ -112,13 +113,30 @@ target_include_directories(tiecodec_jvm
 target_link_libraries(tiecodec_jvm PUBLIC tiecodec_java tiecodec_targets_api
   tiecodec_extensions)
 
+add_library(tiecodec_cxx STATIC
+  src/targets/cxx/cxx_names.cpp
+  src/targets/cxx/cxx_type_mapper.cpp
+  src/targets/cxx/cxx_emitter.cpp
+  src/targets/cxx/cxx_expressions.cpp
+  src/targets/cxx/cxx_language_factories.cpp
+  src/targets/cxx/cxx_language_backend.cpp
+  src/targets/cxx/cxx_platform_backend.cpp
+  src/targets/cxx/annotations/cxx_annotations.cpp
+  src/targets/cxx/requirements/cxx_requirements.cpp)
+target_include_directories(tiecodec_cxx
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/targets/cxx"
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/targets/cxx/annotations"
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/targets/cxx/requirements")
+target_link_libraries(tiecodec_cxx PUBLIC tiecodec_targets_api tiecodec_annotations
+  tiecodec_extensions)
+
 add_library(tiecodec_builtin STATIC
   src/targets/builtin/register_extensions.cpp
   src/targets/builtin/register_targets.cpp)
 target_include_directories(tiecodec_builtin
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/targets/builtin")
-target_link_libraries(tiecodec_builtin PUBLIC tiecodec_java tiecodec_android tiecodec_jvm
-  tiecodec_annotations tiecodec_extensions)
+target_link_libraries(tiecodec_builtin PUBLIC tiecodec_java tiecodec_cxx tiecodec_android
+  tiecodec_jvm tiecodec_annotations tiecodec_extensions)
 
 add_executable(tiec
   src/cli/main.cpp
@@ -150,7 +168,8 @@ add_executable(tiecodec_tests
   tests/layering_test.cpp
   tests/smoke_test.cpp
   tests/registry_test.cpp
-  tests/jvm_smoke_test.cpp)
+  tests/jvm_smoke_test.cpp
+  tests/cxx_smoke_test.cpp)
 target_link_libraries(tiecodec_tests PRIVATE tiecodec_builtin tiecodec_analysis
   tiecodec_frontend GTest::gtest GTest::gtest_main)
 

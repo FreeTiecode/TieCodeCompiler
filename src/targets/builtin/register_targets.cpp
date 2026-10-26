@@ -7,6 +7,9 @@
 #include "android_constants.h"
 #include "android_java_extension.h"
 #include "android_platform_backend.h"
+#include "cxx_language_backend.h"
+#include "cxx_language_constants.h"
+#include "cxx_platform_backend.h"
 #include "java_language_backend.h"
 #include "java_language_constants.h"
 #include "jvm_constants.h"
@@ -52,6 +55,21 @@ TargetDescriptor JvmTarget() {
   return descriptor;
 }
 
+TargetDescriptor CxxTarget() {
+  TargetDescriptor descriptor;
+  descriptor.key = TargetKey{kCxxPlatformName, kCxxLanguageName};
+  descriptor.display_name = kCxxDisplayName;
+  descriptor.entry_class_name = kCxxEntryClassName;
+  descriptor.entry_method = kCxxEntryMethodName;
+  descriptor.create = [](const GenerationInput& input) {
+    TargetSession session;
+    session.language = std::make_unique<CxxLanguageBackend>();
+    session.platform = std::make_unique<CxxPlatformBackend>(input);
+    return session;
+  };
+  return descriptor;
+}
+
 }
 
 bool RegisterBuiltinTargets(TargetRegistry& registry, std::string* error) {
@@ -63,6 +81,11 @@ bool RegisterBuiltinTargets(TargetRegistry& registry, std::string* error) {
   if (!registry.Register(JvmTarget())) {
     if (error != nullptr)
       *error = "重复注册目标: jvm/java";
+    return false;
+  }
+  if (!registry.Register(CxxTarget())) {
+    if (error != nullptr)
+      *error = "重复注册目标: cxx/cxx";
     return false;
   }
   return true;
