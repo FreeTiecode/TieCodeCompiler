@@ -807,25 +807,32 @@ std::string JavaEmitter::EmitArrayLiteral(const ClassInfo& klass, const Expr& ex
 
 void JavaEmitter::BuildInlineTargetIndex() {
   inline_targets_.clear();
-  const auto collect = [this](bool global_classes) {
-    for (const auto& entry : symbols_.classes()) {
-      const ClassInfo& candidate = entry.second;
-      if (candidate.is_global_class != global_classes || candidate.declaration == nullptr)
+  std::unordered_map<std::string, std::vector<InlineTarget>> global_targets;
+  std::unordered_map<std::string, std::vector<InlineTarget>> class_targets;
+  for (const auto& entry : symbols_.classes()) {
+    const ClassInfo& candidate = entry.second;
+    if (candidate.declaration == nullptr)
+      continue;
+    auto& targets = candidate.is_global_class ? global_targets : class_targets;
+    std::set<std::string> indexed;
+    for (const Member& member : candidate.declaration->members) {
+      if (CodeTextOf(member).empty())
         continue;
-      std::set<std::string> indexed;
-      for (const Member& member : candidate.declaration->members) {
-        if (CodeTextOf(member).empty())
-          continue;
-        if (effects_.Get<JavaInlineCodeSpec>(&member) == nullptr)
-          continue;
-        if (!indexed.insert(member.name).second)
-          continue;
-        inline_targets_[member.name].push_back(InlineTarget{&candidate, &member});
-      }
+      if (effects_.Get<JavaInlineCodeSpec>(&member) == nullptr)
+        continue;
+      if (!indexed.insert(member.name).second)
+        continue;
+      targets[member.name].push_back(InlineTarget{&candidate, &member});
     }
-  };
-  collect(true);
-  collect(false);
+  }
+  for (auto& entry : global_targets) {
+    std::vector<InlineTarget>& merged = inline_targets_[entry.first];
+    merged.insert(merged.end(), entry.second.begin(), entry.second.end());
+  }
+  for (auto& entry : class_targets) {
+    std::vector<InlineTarget>& merged = inline_targets_[entry.first];
+    merged.insert(merged.end(), entry.second.begin(), entry.second.end());
+  }
   inline_targets_ready_ = true;
 }
 

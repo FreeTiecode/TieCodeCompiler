@@ -27,6 +27,8 @@ bool type_name_contains_array(const std::string& type_name) {
 }
 
 std::string StripTypeDecorations(const std::string& type_name) {
+  if (type_name.find_first_of("<[?") == std::string::npos)
+    return type_name;
   std::string result;
   int depth = 0;
   for (char c : type_name) {
@@ -1699,36 +1701,26 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
   lint_return_type_.clear();
 }
 
-ClassDecl* JavaEmitter::FindMutableClass(const ClassDecl* declaration) const {
-  if (declaration == nullptr)
-    return nullptr;
-  for (Unit& unit : units_) {
-    for (ClassDecl& klass : unit.classes) {
-      if (&klass == declaration)
-        return &klass;
-    }
-  }
-  return nullptr;
-}
-
 void JavaEmitter::RemoveUnusedLocalsAfterLint() {
   if (diagnostics_.has_errors())
     return;
-  std::set<const ClassDecl*> visited;
+  std::unordered_map<const ClassDecl*, ClassDecl*> mutable_classes;
+  for (Unit& unit : units_) {
+    for (ClassDecl& klass : unit.classes)
+      mutable_classes.emplace(&klass, &klass);
+  }
   for (const std::string& class_name : symbols_.class_names()) {
     const auto found = symbols_.classes().find(class_name);
     if (found == symbols_.classes().end() || found->second.declaration == nullptr)
       continue;
     const ClassDecl* declaration = found->second.declaration;
-    if (!visited.insert(declaration).second)
-      continue;
-    ClassDecl* mutable_declaration = FindMutableClass(declaration);
-    if (mutable_declaration == nullptr) {
+    const auto mutable_entry = mutable_classes.find(declaration);
+    if (mutable_entry == mutable_classes.end()) {
       diagnostics_.Fatal("内部错误: 无法定位类定义 \"" + declaration->name + "\"",
                          "internal.mutable-class");
       return;
     }
-    tiecodec::RemoveUnusedLocals(mutable_declaration, declaration->file, &diagnostics_);
+    tiecodec::RemoveUnusedLocals(mutable_entry->second, declaration->file, &diagnostics_);
   }
 }
 

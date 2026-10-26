@@ -82,6 +82,7 @@ JavaEmitter::JavaEmitter(const SymbolTable& symbols, const TargetConfig& config,
       resources_(resources) {
   if (IsPinyinNaming(config.friendly_name))
     generated_name_counter_ = kPinyinGeneratedNameStart;
+  random_naming_ = IsRandomNaming(config.friendly_name);
 }
 
 void JavaEmitter::SetPlan(
@@ -410,22 +411,31 @@ bool JavaEmitter::EmitOnCreateComponent(const ClassInfo& klass,
   return true;
 }
 
-void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, EmittedText* body) {
-  if (member.kind != MemberKind::kCodeBlock && member.position.line > 0) {
-    body->Mark(current_file_, static_cast<int>(member.position.line) + 1);
-  }
-  {
+void JavaEmitter::RefreshRenames(const ClassInfo& klass) {
+  auto cached = renames_cache_.find(&klass);
+  if (cached == renames_cache_.end()) {
+    std::vector<std::pair<std::string, std::string>> entries;
     const ClassInfo* chain = &klass;
     std::set<const ClassInfo*> visited;
     while (chain != nullptr && chain->declaration != nullptr && visited.insert(chain).second) {
-      for (const Member& chain_member : chain->declaration->members) {
-        renames_[chain_member.name] = names_.MemberName(chain_member);
-      }
+      for (const Member& chain_member : chain->declaration->members)
+        entries.emplace_back(chain_member.name, names_.MemberName(chain_member));
       if (chain->declaration->base_name.empty())
         break;
       chain = symbols_.Resolve(chain->declaration->base_name, chain);
     }
+    cached = renames_cache_.emplace(&klass, std::move(entries)).first;
   }
+  for (const auto& entry : cached->second)
+    renames_[entry.first] = entry.second;
+}
+
+void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, EmittedText* body) {
+  if (member.kind != MemberKind::kCodeBlock && member.position.line > 0) {
+    body->Mark(current_file_, static_cast<int>(member.position.line) + 1);
+  }
+  if (random_naming_)
+    RefreshRenames(klass);
   if (klass.declaration == nullptr)
     return;
 
@@ -449,11 +459,13 @@ void JavaEmitter::EmitMember(const ClassInfo& klass, const Member& member, Emitt
     return;
   }
 
-  current_return_type_ = member.type_name;
-  const JavaModifiers* modifiers = effects_.Get<JavaModifiers>(&member);
-
   if (effects_.Get<JavaInlineCodeSpec>(&member) != nullptr)
     return;
+
+  if (!random_naming_)
+    RefreshRenames(klass);
+  current_return_type_ = member.type_name;
+  const JavaModifiers* modifiers = effects_.Get<JavaModifiers>(&member);
 
   switch (member.kind) {
     case MemberKind::kCodeBlock: {
@@ -770,18 +782,6 @@ void JavaEmitter::EmitMemberBody(const ClassInfo& klass, const Member& member, E
     }
     return;
   }
-  {
-    const ClassInfo* chain = &klass;
-    std::set<const ClassInfo*> visited;
-    while (chain != nullptr && chain->declaration != nullptr && visited.insert(chain).second) {
-      for (const Member& chain_member : chain->declaration->members) {
-        renames_[chain_member.name] = names_.MemberName(chain_member);
-      }
-      if (chain->declaration->base_name.empty())
-        break;
-      chain = symbols_.Resolve(chain->declaration->base_name, chain);
-    }
-  }
   for (const Parameter& parameter : member.parameters) {
     if (parameter.name.empty())
       continue;
@@ -940,9 +940,15 @@ void JavaEmitter::EmitIf(const ClassInfo& klass, const Stmt& statement, int inde
   if (statement.else_body.size() == 1 && statement.else_body[0] != nullptr &&
       statement.else_body[0]->kind == StmtKind::kIf) {
     out->Mark(current_file_, static_cast<int>(statement.position.line) + 1);
-    Indent(indent, out);
-    out->append("} else {");
-    EmitIf(klass, *statement.else_body[0], indent, true, out);
+    if (statement.else_keyword_else) {
+      Indent(indent, out);
+      out->append("} else {");
+      EmitIf(klass, *statement.else_body[0], indent, true, out);
+    } else {
+      Indent(indent, out);
+      out->append("} else {\n");
+      EmitIf(klass, *statement.else_body[0], indent + 1, false, out);
+    }
     if (statement.end_line > 0)
       out->Mark(current_file_, statement.end_line);
     Indent(indent, out);

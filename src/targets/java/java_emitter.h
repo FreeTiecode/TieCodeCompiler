@@ -141,6 +141,7 @@ public:
 private:
   void EmitMember(const ClassInfo& klass, const Member& member, EmittedText* body);
   void EmitMemberBody(const ClassInfo& klass, const Member& member, EmittedText* body);
+  void RefreshRenames(const ClassInfo& klass);
   void EmitStatement(const ClassInfo& klass, const Stmt& statement, int indent, EmittedText* out);
   void EmitIf(const ClassInfo& klass, const Stmt& statement, int indent, bool inline_prefix,
               EmittedText* out);
@@ -238,7 +239,6 @@ private:
   std::vector<std::string> spec_arguments_;
   std::set<std::string>* spec_imports_ = nullptr;
   bool record_imports_for_spec_ = false;
-  ClassDecl* FindMutableClass(const ClassDecl* declaration) const;
   void ReportUnsupported(const ClassInfo& klass, const SourcePosition& position,
                          const std::string& message, const std::string& key);
   void ReportUnresolvedType(const ClassInfo& klass, const std::string& type_name);
@@ -278,7 +278,10 @@ private:
   const std::vector<const ClassInfo*>* output_classes_ = nullptr;
 
   int generated_name_counter_ = 0;
-  std::map<std::string, std::string> renames_;
+  bool random_naming_ = false;
+  std::unordered_map<std::string, std::string> renames_;
+  std::unordered_map<const ClassInfo*, std::vector<std::pair<std::string, std::string>>>
+      renames_cache_;
   std::map<std::string, std::string> local_types_;
   std::map<std::string, std::string> current_parameters_;
   std::vector<Parameter> current_parameter_types_;
