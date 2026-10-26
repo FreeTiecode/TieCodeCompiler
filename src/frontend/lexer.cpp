@@ -105,13 +105,6 @@ Lexer::Lexer(std::string source, std::string file_name, Diagnostics* diagnostics
   }
 }
 
-const Token& Lexer::Peek(std::size_t count) {
-  while (buffer_.size() <= count) {
-    buffer_.push_back(Lex());
-  }
-  return buffer_[count];
-}
-
 Token Lexer::Next() {
   if (!buffer_.empty()) {
     Token token = std::move(buffer_.front());

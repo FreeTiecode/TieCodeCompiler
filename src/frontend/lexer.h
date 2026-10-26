@@ -15,7 +15,12 @@ class Lexer {
 public:
   Lexer(std::string source, std::string file_name, Diagnostics* diagnostics);
 
-  const Token& Peek(std::size_t count = 0);
+  const Token& Peek(std::size_t count = 0) {
+    while (buffer_.size() <= count) {
+      buffer_.push_back(Lex());
+    }
+    return buffer_[count];
+  }
 
   Token Next();
 

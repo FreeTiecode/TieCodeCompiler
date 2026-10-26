@@ -23,11 +23,17 @@ private:
   const Token& Peek(std::size_t count = 0);
   Token Next();
   bool Check(const std::string& text);
+  bool Check(const char* text);
   bool CheckSymbol(const std::string& text);
+  bool CheckSymbol(const char* text);
   bool Match(const std::string& text);
+  bool Match(const char* text);
   bool MatchSymbol(const std::string& text);
+  bool MatchSymbol(const char* text);
   bool Expect(const std::string& text, const std::string& what);
+  bool Expect(const char* text, const char* what);
   bool ExpectSymbol(const std::string& text, const std::string& what);
+  bool ExpectSymbol(const char* text, const char* what);
   bool IsAtEnd();
   void Error(const std::string& message);
   void ErrorAt(const SourcePosition& position, const std::string& message);
@@ -76,7 +82,6 @@ private:
   ExprPtr MakeExpr(ExprKind kind, const SourcePosition& position);
   bool IsStatementBoundary();
 
-  std::string source_;
   int line_count_ = 0;
   SourcePosition last_position_;
   std::string file_name_;

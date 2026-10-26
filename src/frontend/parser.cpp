@@ -3,19 +3,24 @@
 #include "constants.h"
 
 namespace tiecodec {
-namespace {}
+namespace {
+
+int CountLines(const std::string& text) {
+  int lines = 1;
+  for (char c : text) {
+    if (c == '\n')
+      ++lines;
+  }
+  return lines;
+}
+
+}
 
 Parser::Parser(std::string source, std::string file_name, Diagnostics* diagnostics)
-    : source_(std::move(source)),
+    : line_count_(CountLines(source)),
       file_name_(std::move(file_name)),
       diagnostics_(diagnostics),
-      lexer_(source_, file_name_, diagnostics) {
-  line_count_ = 1;
-  for (char c : source_) {
-    if (c == '\n')
-      ++line_count_;
-  }
-}
+      lexer_(std::move(source), file_name_, diagnostics) {}
 
 const Token& Parser::Peek(std::size_t count) {
   return lexer_.Peek(count);
@@ -33,7 +38,18 @@ bool Parser::Check(const std::string& text) {
          token.text == text;
 }
 
+bool Parser::Check(const char* text) {
+  const Token& token = Peek();
+  return (token.kind == TokenKind::kIdentifier || token.kind == TokenKind::kSymbol) &&
+         token.text == text;
+}
+
 bool Parser::CheckSymbol(const std::string& text) {
+  const Token& token = Peek();
+  return token.kind == TokenKind::kSymbol && token.text == text;
+}
+
+bool Parser::CheckSymbol(const char* text) {
   const Token& token = Peek();
   return token.kind == TokenKind::kSymbol && token.text == text;
 }
@@ -45,7 +61,21 @@ bool Parser::Match(const std::string& text) {
   return true;
 }
 
+bool Parser::Match(const char* text) {
+  if (!Check(text))
+    return false;
+  Next();
+  return true;
+}
+
 bool Parser::MatchSymbol(const std::string& text) {
+  if (!CheckSymbol(text))
+    return false;
+  Next();
+  return true;
+}
+
+bool Parser::MatchSymbol(const char* text) {
   if (!CheckSymbol(text))
     return false;
   Next();
@@ -72,10 +102,24 @@ bool Parser::Expect(const std::string& text, const std::string& what) {
   return false;
 }
 
+bool Parser::Expect(const char* text, const char* what) {
+  if (Match(text))
+    return true;
+  Error("期望 " + std::string(what) + "，实际遇到 \"" + Peek().text + "\"");
+  return false;
+}
+
 bool Parser::ExpectSymbol(const std::string& text, const std::string& what) {
   if (MatchSymbol(text))
     return true;
   Error("期望 " + what + "，实际遇到 \"" + Peek().text + "\"");
+  return false;
+}
+
+bool Parser::ExpectSymbol(const char* text, const char* what) {
+  if (MatchSymbol(text))
+    return true;
+  Error("期望 " + std::string(what) + "，实际遇到 \"" + Peek().text + "\"");
   return false;
 }
 
@@ -816,11 +860,18 @@ StmtPtr Parser::ParseIf() {
     const bool same_line_condition =
         !IsAtEnd() && !(Check("结束")) && Peek().position.line == else_position.line && !Check(";");
     if (Check("如果")) {
-      statement->else_body.push_back(ParseIf());
+      const StmtPtr nested = ParseIf();
+      nested->position = else_position;
+      statement->else_body.push_back(nested);
+      if (Check("结束"))
+        statement->end_line = static_cast<int>(Peek().position.line) + 1;
+      Expect("结束", "'结束'");
+      Expect("如果", "'如果'");
       return statement;
     }
     if (same_line_condition) {
       statement->else_body.push_back(ParseIfConditional());
+      statement->else_keyword_else = true;
       return statement;
     }
     while (!IsAtEnd() &&
@@ -869,6 +920,7 @@ StmtPtr Parser::ParseIfConditional() {
         !IsAtEnd() && !Check("结束") && Peek().position.line == else_position.line && !Check(";");
     if (same_line_condition) {
       statement->else_body.push_back(ParseIfConditional());
+      statement->else_keyword_else = true;
       return statement;
     }
     while (!IsAtEnd() &&
