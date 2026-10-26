@@ -99,7 +99,7 @@ protected:
     const char* from_env = std::getenv(kCompilerEnvVar);
     if (from_env != nullptr && *from_env != '\0')
       return from_env;
-    return (fs::path(TIECODEC_BINARY_DIR) / "tiecodec").string();
+    return (fs::path(TIECODEC_BINARY_DIR) / "tiec").string();
   }
 
   static std::string UniqueDirectoryName() {
@@ -701,7 +701,7 @@ TEST_F(SmokeTest, DisablesFtcInlineSemicolon) {
   EXPECT_TRUE(Contains(result.log, "内联代码语句")) << result.log;
 }
 
-TEST_F(SmokeTest, SupportsElseIfWithSingleTerminator) {
+TEST_F(SmokeTest, RequiresTerminatorForNestedElseIf) {
   std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
   source << "类 启动窗口 : 窗口\n"
             "  事件 启动窗口:创建完毕()\n"
@@ -709,6 +709,24 @@ TEST_F(SmokeTest, SupportsElseIfWithSingleTerminator) {
             "      调试输出(\"a\")\n"
             "    否则 如果 真\n"
             "      调试输出(\"b\")\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  EXPECT_NE(result.status, 0) << result.log;
+}
+
+TEST_F(SmokeTest, SupportsElseIfWithNestedTerminator) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    如果 假\n"
+            "      调试输出(\"a\")\n"
+            "    否则 如果 真\n"
+            "      调试输出(\"b\")\n"
+            "    结束 如果\n"
             "    结束 如果\n"
             "  结束 事件\n"
             "结束 类\n";
@@ -718,14 +736,15 @@ TEST_F(SmokeTest, SupportsElseIfWithSingleTerminator) {
   ASSERT_EQ(result.status, 0) << result.log;
 }
 
-TEST_F(SmokeTest, RejectsDoubleElseIfTerminator) {
+TEST_F(SmokeTest, EmitsNestedIfBlockForKeywordElse) {
   std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
   source << "类 启动窗口 : 窗口\n"
             "  事件 启动窗口:创建完毕()\n"
-            "    如果 假\n"
-            "      调试输出(\"a\")\n"
-            "    否则 如果 真\n"
-            "      调试输出(\"b\")\n"
+            "    变量 数量: 整数 = 2\n"
+            "    如果 数量 > 3\n"
+            "      调试输出(\"大\")\n"
+            "    否则 如果 数量 > 1\n"
+            "      调试输出(\"中\")\n"
             "    结束 如果\n"
             "    结束 如果\n"
             "  结束 事件\n"
@@ -733,7 +752,85 @@ TEST_F(SmokeTest, RejectsDoubleElseIfTerminator) {
   source.close();
 
   const ProcessResult result = RunCompiler();
-  EXPECT_NE(result.status, 0) << result.log;
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "} else {\n      if (数量 > 1) {")) << java;
+}
+
+TEST_F(SmokeTest, EmitsInlineIfForConditionalElse) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 数量: 整数 = 2\n"
+            "    如果 数量 > 3\n"
+            "      调试输出(\"大\")\n"
+            "    否则 数量 > 1\n"
+            "      调试输出(\"中\")\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "} else {if (数量 > 1) {")) << java;
+}
+
+TEST_F(SmokeTest, SupportsElseBlockWithNestedIf) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    如果 假\n"
+            "      调试输出(\"a\")\n"
+            "    否则\n"
+            "      如果 真\n"
+            "        调试输出(\"b\")\n"
+            "      结束 如果\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+}
+
+TEST_F(SmokeTest, ResolvesTransitiveLocalUsage) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 甲: 整数 = 1\n"
+            "    变量 乙: 整数 = 甲 + 1\n"
+            "    调试输出(乙)\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  EXPECT_FALSE(Contains(result.log, "未被使用")) << result.log;
+}
+
+TEST_F(SmokeTest, RemovesUnusedLocalChains) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 甲: 整数 = 1\n"
+            "    变量 乙: 整数 = 甲 + 1\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  std::size_t warnings = 0;
+  std::size_t cursor = result.log.find("未被使用");
+  while (cursor != std::string::npos) {
+    ++warnings;
+    cursor = result.log.find("未被使用", cursor + 1);
+  }
+  EXPECT_EQ(warnings, 2u) << result.log;
 }
 
 TEST_F(SmokeTest, HandlesMapKeyValueForeach) {

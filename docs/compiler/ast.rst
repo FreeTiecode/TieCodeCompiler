@@ -172,6 +172,7 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      SourcePosition type_position;
      int end_line = 0;             // 1 基
      SourcePosition else_position;
+     bool else_keyword_else = false;
      bool is_const = false;
 
      std::string loop_variable;
@@ -211,7 +212,7 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      - ``name``\ 、``type_name``\ 、``expr``\ 或 ``code_text``\ 、``is_const``
      - ``变量``/``常量``\ 。
    * - ``kIf``
-     - ``expr``\ 、``body``\ 、``else_body``\ 、``else_position``\ 、``end_line``
+     - ``expr``\ 、``body``\ 、``else_body``\ 、``else_position``\ 、``else_keyword_else``\ 、``end_line``
      - ``如果``/``否则``\ 。
    * - ``kLoopCount``
      - ``loop_variable``\ 、``loop_begin``\ 、``loop_end``\ 、``loop_step``\ 、``body``

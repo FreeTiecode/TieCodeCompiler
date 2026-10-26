@@ -80,7 +80,7 @@ JVM 端到端样例
    结束 类
    EOF
 
-   ./build/tiecodec --platform jvm --release --friendly-name original \
+   ./build/tiec --platform jvm --release --friendly-name original \
        -o "$tmp/out" \
        stdlibs/安卓基本库/源代码/Java/JVM_基本类型.t \
        $(find stdlibs/JVM基本库/源代码 -name '*.t') \
@@ -113,7 +113,7 @@ Android 端到端样例
    结束 类
    EOF
 
-   ./build/tiecodec --platform android --release --friendly-name original \
+   ./build/tiec --platform android --release --friendly-name original \
        -o "$tmp/out" \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') \
        "$tmp/启动窗口.t"
@@ -194,9 +194,9 @@ Android 端到端样例
 
 .. code-block:: bash
 
-   ./build/tiecodec --platform android --check \
+   ./build/tiec --platform android --check \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') "$tmp/app.t"
-   ./build/tiecodec --platform android --check --dump-ast \
+   ./build/tiec --platform android --check --dump-ast \
        $(find stdlibs/安卓基本库/源代码 -name '*.t') "$tmp/app.t"
 
 ``--check``\ 不产生输出目录，但会执行符号、需求、lint/类型检查与语言代码生成；因此必须同时传入目标标准库。``--dump-ast``\ 只打印摘要。
@@ -214,8 +214,8 @@ Android 端到端样例
    * - 场景
      - 期望
      - 检查点
-   * - 重复 ``结束 如果``
-     - 额外终止符报错
+   * - ``结束 如果`` 数量多于 ``如果`` 数量
+     - 多余终止符报错
      - 编译诊断。
    * - ``@编译条件``\ 放 unit
      - 注解级别错误
@@ -241,7 +241,7 @@ Android 端到端样例
 
 .. code-block:: bash
 
-   ctest --test-dir build --output-on-failure -R 'SmokeTest\.(InitializesLocalVariablesLikeFields|SupportsElseIfWithSingleTerminator|RejectsDoubleElseIfTerminator|NoArgForcedOutputKeepsClass|ForcedTrueKeepsClassMembers|SupportsAnnotatedPropertyAccessors|ReadsOctalIntegerLiteral|DispatchesExternalTextEquality|DispatchesExternalTextContains|FoldsIntegerOverflowAsInt32|AcceptsHexLongLiteral|RejectsDecimalLongLiteral|UsesJavaArrayLength|CompilesAsyncConditionAndSwitch|CompilesAsyncCountLoopWithStep|CompilesAsyncForeachWithAwait|HandlesMapKeyValueForeach|SupportsNegativeCountStep|SwapsObjectIndexers|DeduplicatesSubscriptions|EmitsPrimitiveEventDefaults|RejectsInvalidMemberOutputName|EmitsHiddenClassWithoutPublicModifier|ReportsDeprecatedMemberUsage|AppliesGenericParameterDefaults|UsesAssignmentOperatorForMultiExpression|RejectsBreakOutsideLoop|RejectsPrimitiveInstanceof|IgnoresEndMarkerInsideCodeComment|TreatsDottedCodeIdentifierAsField|EmitsUntypedArrayLiteralAsObjectArray|ReportsUnclosedBlockCommentAndLongString|CheckRejectsUnresolvedGenericArgument|DisablesFtcGenericFeatures|DisablesFtcOperatorFeatures|DisablesFtcInlineSemicolon|DisablesFtcNegativeStep|DisablesFtcDuplicateSubscriptions|DisablesFtcPrimitiveEventDefault)'
+   ctest --test-dir build --output-on-failure -R 'SmokeTest\.(InitializesLocalVariablesLikeFields|RequiresTerminatorForNestedElseIf|SupportsElseIfWithNestedTerminator|SupportsElseBlockWithNestedIf|NoArgForcedOutputKeepsClass|ForcedTrueKeepsClassMembers|SupportsAnnotatedPropertyAccessors|ReadsOctalIntegerLiteral|DispatchesExternalTextEquality|DispatchesExternalTextContains|FoldsIntegerOverflowAsInt32|AcceptsHexLongLiteral|RejectsDecimalLongLiteral|UsesJavaArrayLength|CompilesAsyncConditionAndSwitch|CompilesAsyncCountLoopWithStep|CompilesAsyncForeachWithAwait|HandlesMapKeyValueForeach|SupportsNegativeCountStep|SwapsObjectIndexers|DeduplicatesSubscriptions|EmitsPrimitiveEventDefaults|RejectsInvalidMemberOutputName|EmitsHiddenClassWithoutPublicModifier|ReportsDeprecatedMemberUsage|AppliesGenericParameterDefaults|UsesAssignmentOperatorForMultiExpression|RejectsBreakOutsideLoop|RejectsPrimitiveInstanceof|IgnoresEndMarkerInsideCodeComment|TreatsDottedCodeIdentifierAsField|EmitsUntypedArrayLiteralAsObjectArray|ReportsUnclosedBlockCommentAndLongString|CheckRejectsUnresolvedGenericArgument|DisablesFtcGenericFeatures|DisablesFtcOperatorFeatures|DisablesFtcInlineSemicolon|DisablesFtcNegativeStep|DisablesFtcDuplicateSubscriptions|DisablesFtcPrimitiveEventDefault)'
 
 默认模式下上述测试应全部通过；`--disable-ftc-features` 的测试应确认泛型、运算符重载、内联 code 分号、map 键值遍历、负步长、对象下标交换、重复订阅和原始类型事件默认值相关代码会显式报错。兼容开关说明见 :doc:`divergences` 的“FTC 默认修正与兼容开关”。
 
