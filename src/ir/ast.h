@@ -110,6 +110,7 @@ struct Stmt {
   SourcePosition type_position;
   int end_line = 0;
   SourcePosition else_position;
+  bool else_keyword_else = false;
   bool is_const = false;
 
   std::string loop_variable;

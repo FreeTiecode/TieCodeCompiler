@@ -98,6 +98,7 @@ bool SymbolTable::AddUnit(const Unit& unit, const SemanticModel& semantics,
     for (const Member& member : class_decl.members)
       stored.member_by_name.emplace(member.name, &member);
     class_names_.push_back(stored.qualified_name);
+    package_classes_[stored.package_name].emplace(class_decl.name, &stored);
     const auto index_entry = simple_name_index_.emplace(SimpleName(stored.qualified_name), &stored);
     if (!index_entry.second)
       index_entry.first->second = nullptr;
@@ -130,7 +131,10 @@ const ClassInfo* SymbolTable::Find(const std::string& qualified_name) const {
 
 const ClassInfo* SymbolTable::Resolve(const std::string& type_name,
                                       const ClassInfo* context_class) const {
-  const std::string base = BaseTypeName(type_name);
+  std::string stripped;
+  const std::string& base = type_name.find_first_of("<[?") == std::string::npos
+                                ? type_name
+                                : (stripped = BaseTypeName(type_name));
   if (base.empty())
     return nullptr;
 
@@ -138,8 +142,11 @@ const ClassInfo* SymbolTable::Resolve(const std::string& type_name,
     return exact;
 
   if (context_class != nullptr && !context_class->package_name.empty()) {
-    if (const ClassInfo* same_package = Find(context_class->package_name + "." + base)) {
-      return same_package;
+    const auto package = package_classes_.find(context_class->package_name);
+    if (package != package_classes_.end()) {
+      const auto same_package = package->second.find(base);
+      if (same_package != package->second.end())
+        return same_package->second;
     }
   }
 

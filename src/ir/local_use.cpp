@@ -1,6 +1,7 @@
 #include "local_use.h"
 
 #include <algorithm>
+#include <map>
 #include <vector>
 
 namespace tiecodec {
@@ -30,27 +31,37 @@ void CollectRefs(const Expr* expression, std::set<std::string>* refs) {
     CollectRefs(child.get(), refs);
 }
 
-void CollectRefs(const Stmt* statement, const std::set<std::string>& used,
-                 std::set<std::string>* refs) {
+struct LocalDependencies {
+  std::set<std::string> roots;
+  std::map<std::string, std::set<std::string>> initializers;
+};
+
+void CollectDependencies(const Stmt* statement, LocalDependencies* dependencies) {
   if (statement == nullptr)
     return;
-  if (statement->kind == StmtKind::kVariable && !used.count(statement->name)) {
+  if (statement->kind == StmtKind::kVariable) {
+    std::set<std::string> refs;
+    CollectRefs(statement->expr.get(), &refs);
+    CollectRefs(statement->loop_begin.get(), &refs);
+    CollectRefs(statement->loop_end.get(), &refs);
+    CollectRefs(statement->loop_step.get(), &refs);
+    dependencies->initializers[statement->name].insert(refs.begin(), refs.end());
     return;
   }
-  CollectRefs(statement->expr.get(), refs);
-  CollectRefs(statement->loop_begin.get(), refs);
-  CollectRefs(statement->loop_end.get(), refs);
-  CollectRefs(statement->loop_step.get(), refs);
+  CollectRefs(statement->expr.get(), &dependencies->roots);
+  CollectRefs(statement->loop_begin.get(), &dependencies->roots);
+  CollectRefs(statement->loop_end.get(), &dependencies->roots);
+  CollectRefs(statement->loop_step.get(), &dependencies->roots);
   for (const SwitchCase& switch_case : statement->cases) {
     for (const ExprPtr& value : switch_case.values)
-      CollectRefs(value.get(), refs);
+      CollectRefs(value.get(), &dependencies->roots);
     for (const StmtPtr& child : switch_case.body)
-      CollectRefs(child.get(), used, refs);
+      CollectDependencies(child.get(), dependencies);
   }
   for (const StmtPtr& child : statement->body)
-    CollectRefs(child.get(), used, refs);
+    CollectDependencies(child.get(), dependencies);
   for (const StmtPtr& child : statement->else_body)
-    CollectRefs(child.get(), used, refs);
+    CollectDependencies(child.get(), dependencies);
 }
 
 }
@@ -62,20 +73,28 @@ std::set<std::string> UsedLocalNames(const Member& member) {
   if (declared.empty())
     return {};
 
+  LocalDependencies dependencies;
+  for (const StmtPtr& statement : member.body)
+    CollectDependencies(statement.get(), &dependencies);
+
   std::set<std::string> used;
-  std::set<std::string> previous;
-  while (used != previous || previous.empty()) {
-    previous = used;
-    std::set<std::string> refs;
-    for (const StmtPtr& statement : member.body)
-      CollectRefs(statement.get(), used, &refs);
-    used.clear();
-    for (const std::string& name : declared) {
-      if (refs.count(name))
-        used.insert(name);
+  std::set<std::string> pending;
+  for (const std::string& name : declared) {
+    if (dependencies.roots.count(name) != 0)
+      pending.insert(name);
+  }
+  while (!pending.empty()) {
+    const std::string name = *pending.begin();
+    pending.erase(pending.begin());
+    if (!used.insert(name).second)
+      continue;
+    const auto initializer = dependencies.initializers.find(name);
+    if (initializer == dependencies.initializers.end())
+      continue;
+    for (const std::string& reference : initializer->second) {
+      if (declared.count(reference) != 0 && used.count(reference) == 0)
+        pending.insert(reference);
     }
-    if (used == previous)
-      break;
   }
   return used;
 }

@@ -1,7 +1,7 @@
 #include "program.h"
 
-#include <set>
 #include <string>
+#include <unordered_set>
 
 namespace tiecodec {
 
@@ -23,7 +23,8 @@ const ClassInfo* FindEntryClass(const SymbolTable& symbols, const std::string& n
 }
 
 bool ValidateSymbolPointers(const Program& program, Diagnostics* diagnostics) {
-  std::set<const ClassDecl*> declarations;
+  std::unordered_set<const ClassDecl*> declarations;
+  declarations.reserve(program.symbols.class_count());
   for (const Unit& unit : program.units) {
     for (const ClassDecl& klass : unit.classes)
       declarations.insert(&klass);
@@ -37,11 +38,15 @@ bool ValidateSymbolPointers(const Program& program, Diagnostics* diagnostics) {
       }
       return false;
     }
-    std::set<const Member*> members;
-    for (const Member& member : info.declaration->members)
-      members.insert(&member);
+    const auto member_is_declared = [&info](const Member* member) {
+      for (const Member& declared : info.declaration->members) {
+        if (&declared == member)
+          return true;
+      }
+      return false;
+    };
     for (const auto& member_entry : info.member_by_name) {
-      if (members.count(member_entry.second) == 0) {
+      if (member_entry.second == nullptr || !member_is_declared(member_entry.second)) {
         if (diagnostics != nullptr) {
           diagnostics->Fatal("内部错误: 成员符号指针失效 \"" + info.qualified_name + "." +
                                  member_entry.first + "\"",

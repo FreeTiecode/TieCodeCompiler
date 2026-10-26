@@ -73,6 +73,7 @@ private:
   std::map<std::string, ClassInfo> classes_;
   std::vector<std::string> class_names_;
   std::map<std::string, const ClassInfo*> simple_name_index_;
+  std::map<std::string, std::map<std::string, const ClassInfo*>> package_classes_;
   std::vector<const ClassInfo*> global_classes_;
   mutable std::unordered_map<std::string, std::vector<GlobalMemberRef>> global_member_index_;
   mutable bool global_member_index_ready_ = false;
