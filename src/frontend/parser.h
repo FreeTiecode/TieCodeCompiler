@@ -57,8 +57,6 @@ private:
                   std::vector<Annotation>* inline_annotations = nullptr);
   StmtPtr ParseStatement(std::vector<Annotation>* inline_annotations = nullptr);
   StmtPtr ParseIf();
-
-  StmtPtr ParseIfConditional();
   StmtPtr ParseSwitch();
   StmtPtr ParseLoop();
   StmtPtr ParseReturn();

@@ -98,19 +98,27 @@ struct SwitchCase {
   SourcePosition position;
 };
 
+struct IfArm {
+  SourcePosition position;
+  ExprPtr condition;
+  std::vector<StmtPtr> body;
+  int end_line = 0;
+  bool block_else = false;
+};
+
 struct Stmt {
   StmtKind kind = StmtKind::kExpression;
   SourcePosition position;
   ExprPtr expr;
   std::vector<StmtPtr> body;
   std::vector<StmtPtr> else_body;
+  std::vector<IfArm> if_arms;
 
   std::string name;
   std::string type_name;
   SourcePosition type_position;
   int end_line = 0;
   SourcePosition else_position;
-  bool else_keyword_else = false;
   bool is_const = false;
 
   std::string loop_variable;

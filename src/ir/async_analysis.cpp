@@ -49,6 +49,14 @@ bool StatementContainsAwaitNode(const Stmt* statement) {
     if (StatementContainsAwaitNode(child.get()))
       return true;
   }
+  for (const IfArm& arm : statement->if_arms) {
+    if (ExpressionListContainsAwait({arm.condition}))
+      return true;
+    for (const StmtPtr& child : arm.body) {
+      if (StatementContainsAwaitNode(child.get()))
+        return true;
+    }
+  }
   return false;
 }
 
@@ -63,6 +71,10 @@ bool ListHasPostAwaitStatement(const std::vector<StmtPtr>& list) {
       return true;
     if (ListHasPostAwaitStatement(statement->else_body))
       return true;
+    for (const IfArm& arm : statement->if_arms) {
+      if (ListHasPostAwaitStatement(arm.body))
+        return true;
+    }
     for (const SwitchCase& switch_case : statement->cases) {
       if (ListHasPostAwaitStatement(switch_case.body))
         return true;

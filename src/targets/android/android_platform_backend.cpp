@@ -493,6 +493,10 @@ bool AndroidPlatformBackend::WriteProjectFiles(const GenerationInput& input,
             }
             walk_statements(statement->body);
             walk_statements(statement->else_body);
+            for (const IfArm& arm : statement->if_arms) {
+              walk_expression(arm.condition.get());
+              walk_statements(arm.body);
+            }
           }
         };
     if (klass.declaration == nullptr)

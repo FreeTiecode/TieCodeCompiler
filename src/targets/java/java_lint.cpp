@@ -59,6 +59,10 @@ bool ContainsCodeStatement(const std::vector<StmtPtr>& statements) {
       return true;
     if (ContainsCodeStatement(statement->else_body))
       return true;
+    for (const IfArm& arm : statement->if_arms) {
+      if (ContainsCodeStatement(arm.body))
+        return true;
+    }
     for (const SwitchCase& switch_case : statement->cases) {
       if (ContainsCodeStatement(switch_case.body))
         return true;
@@ -73,9 +77,15 @@ bool StatementAlwaysReturns(const Stmt& statement) {
       return true;
     case StmtKind::kBlock:
       return ListAlwaysReturns(statement.body);
-    case StmtKind::kIf:
-      return !statement.else_body.empty() && ListAlwaysReturns(statement.body) &&
-             ListAlwaysReturns(statement.else_body);
+    case StmtKind::kIf: {
+      if (statement.if_arms.empty() || statement.else_body.empty())
+        return false;
+      for (const IfArm& arm : statement.if_arms) {
+        if (!ListAlwaysReturns(arm.body))
+          return false;
+      }
+      return ListAlwaysReturns(statement.else_body);
+    }
     case StmtKind::kSwitch: {
       bool has_default = false;
       for (const SwitchCase& switch_case : statement.cases) {
@@ -520,6 +530,9 @@ void JavaEmitter::RunAnalysisLints() {
             }
             walk(statement->body, klass);
             walk(statement->else_body, klass);
+            for (const IfArm& arm : statement->if_arms) {
+              walk(arm.body, klass);
+            }
           }
         };
     for (const std::string& class_name : symbols_.class_names()) {
@@ -1140,6 +1153,10 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
       }
       check_special_statements(statement->body, nested_depth);
       check_special_statements(statement->else_body, nested_depth);
+      for (const IfArm& arm : statement->if_arms) {
+        check_special_expressions(arm.condition.get(), true);
+        check_special_statements(arm.body, nested_depth);
+      }
     }
   };
   check_special_statements(member.body, 0);
@@ -1585,12 +1602,14 @@ void JavaEmitter::AnalyzeMember(const ClassInfo& klass, const Member& member) {
         break;
       }
       case StmtKind::kIf: {
-        check_symbols(statement.expr.get(), false);
-        check_static(statement.expr.get());
-        walk_type_expression(statement.expr.get());
-        scopes.emplace_back();
-        walk_block(statement.body, true);
-        scopes.pop_back();
+        for (const IfArm& arm : statement.if_arms) {
+          check_symbols(arm.condition.get(), false);
+          check_static(arm.condition.get());
+          walk_type_expression(arm.condition.get());
+          scopes.emplace_back();
+          walk_block(arm.body, true);
+          scopes.pop_back();
+        }
         if (!statement.else_body.empty()) {
           scopes.emplace_back();
           walk_block(statement.else_body, true);

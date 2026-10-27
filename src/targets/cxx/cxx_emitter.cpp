@@ -1023,9 +1023,20 @@ void CxxEmitter::EmitVariable(const ClassInfo& klass, const Stmt& statement, int
 
 void CxxEmitter::EmitIf(const ClassInfo& klass, const Stmt& statement, int indent,
                         EmittedText* out) {
-  out->append(IndentText(indent) + "if (" + EmitExpressionAs(klass, *statement.expr, "逻辑型") +
-              ") {\n");
-  EmitBlock(klass, statement.body, indent + 1, out);
+  const std::vector<IfArm>& arms = statement.if_arms;
+  for (std::size_t i = 0; i < arms.size(); ++i) {
+    const IfArm& arm = arms[i];
+    if (i == 0) {
+      out->append(IndentText(indent) + "if (" + EmitExpressionAs(klass, *arm.condition, "逻辑型") +
+                  ") {\n");
+    } else {
+      out->Mark(current_file_, static_cast<int>(arm.position.line));
+      out->append(IndentText(indent) + "} else ");
+      out->append(IndentText(indent) + "if (" + EmitExpressionAs(klass, *arm.condition, "逻辑型") +
+                  ") {\n");
+    }
+    EmitBlock(klass, arm.body, indent + 1, out);
+  }
   if (statement.else_body.empty()) {
     out->append(IndentText(indent) + "}\n");
     return;
@@ -1581,6 +1592,14 @@ bool CxxEmitter::ContainsAwait(const Stmt& statement) const {
     if (inner != nullptr && ContainsAwait(*inner))
       return true;
   }
+  for (const IfArm& arm : statement.if_arms) {
+    if (arm.condition != nullptr && ContainsAwaitExpr(*arm.condition))
+      return true;
+    for (const StmtPtr& inner : arm.body) {
+      if (inner != nullptr && ContainsAwait(*inner))
+        return true;
+    }
+  }
   for (const SwitchCase& switch_case : statement.cases) {
     for (const StmtPtr& inner : switch_case.body) {
       if (inner != nullptr && ContainsAwait(*inner))
@@ -1913,6 +1932,14 @@ void CxxEmitter::CollectIncludesFromStatement(const ClassInfo& klass, const Stmt
   for (const StmtPtr& inner : statement.else_body) {
     if (inner != nullptr)
       CollectIncludesFromStatement(klass, *inner, includes, depth + 1);
+  }
+  for (const IfArm& arm : statement.if_arms) {
+    if (arm.condition != nullptr)
+      CollectIncludesFromExpression(klass, *arm.condition, includes, depth + 1);
+    for (const StmtPtr& inner : arm.body) {
+      if (inner != nullptr)
+        CollectIncludesFromStatement(klass, *inner, includes, depth + 1);
+    }
   }
   for (const SwitchCase& switch_case : statement.cases) {
     for (const ExprPtr& value : switch_case.values) {

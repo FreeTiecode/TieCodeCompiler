@@ -20,6 +20,10 @@ void CollectDeclared(const Stmt* statement, std::set<std::string>* declared) {
     CollectDeclared(child.get(), declared);
   for (const StmtPtr& child : statement->else_body)
     CollectDeclared(child.get(), declared);
+  for (const IfArm& arm : statement->if_arms) {
+    for (const StmtPtr& child : arm.body)
+      CollectDeclared(child.get(), declared);
+  }
 }
 
 void CollectRefs(const Expr* expression, std::set<std::string>* refs) {
@@ -62,6 +66,11 @@ void CollectDependencies(const Stmt* statement, LocalDependencies* dependencies)
     CollectDependencies(child.get(), dependencies);
   for (const StmtPtr& child : statement->else_body)
     CollectDependencies(child.get(), dependencies);
+  for (const IfArm& arm : statement->if_arms) {
+    CollectRefs(arm.condition.get(), &dependencies->roots);
+    for (const StmtPtr& child : arm.body)
+      CollectDependencies(child.get(), dependencies);
+  }
 }
 
 }

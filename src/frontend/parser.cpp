@@ -845,106 +845,75 @@ StmtPtr Parser::ParseIf() {
   auto statement = std::make_shared<Stmt>();
   statement->kind = StmtKind::kIf;
   statement->position = position;
-  statement->expr = ParseExpression();
-  Match("则");
-
-  const auto at_if_terminator = [this]() {
-    return Check("否则") ||
-           (Check("结束") && Peek(1).kind == TokenKind::kIdentifier && Peek(1).text == "如果");
-  };
-  while (!IsAtEnd() && !at_if_terminator()) {
-    StmtPtr child = ParseStatement();
-    if (child == nullptr) {
-      if (!IsAtEnd())
-        Next();
-      continue;
-    }
-    statement->body.push_back(std::move(child));
-  }
-
-  if (Check("否则")) {
-    const SourcePosition else_position = Next().position;
-    const bool same_line_condition =
-        !IsAtEnd() && !(Check("结束")) && Peek().position.line == else_position.line && !Check(";");
-    if (Check("如果")) {
-      const StmtPtr nested = ParseIf();
-      nested->position = else_position;
-      statement->else_body.push_back(nested);
-      if (Check("结束"))
-        statement->end_line = static_cast<int>(Peek().position.line) + 1;
-      Expect("结束", "'结束'");
-      Expect("如果", "'如果'");
-      return statement;
-    }
-    if (same_line_condition) {
-      statement->else_body.push_back(ParseIfConditional());
-      statement->else_keyword_else = true;
-      return statement;
-    }
-    while (!IsAtEnd() &&
-           !(Check("结束") && Peek(1).kind == TokenKind::kIdentifier && Peek(1).text == "如果")) {
-      StmtPtr child = ParseStatement();
-      if (child == nullptr) {
-        if (!IsAtEnd())
-          Next();
-        continue;
-      }
-      statement->else_body.push_back(std::move(child));
-    }
-  }
-
-  if (Check("结束"))
-    statement->end_line = static_cast<int>(Peek().position.line) + 1;
-  Expect("结束", "'结束'");
-  Expect("如果", "'如果'");
-  return statement;
-}
-
-StmtPtr Parser::ParseIfConditional() {
-  auto statement = std::make_shared<Stmt>();
-  statement->kind = StmtKind::kIf;
-  statement->position = Peek().position;
-  statement->expr = ParseExpression();
-  Match("则");
 
   const auto at_terminator = [this]() {
     return Check("否则") ||
            (Check("结束") && Peek(1).kind == TokenKind::kIdentifier && Peek(1).text == "如果");
   };
-  while (!IsAtEnd() && !at_terminator()) {
-    StmtPtr child = ParseStatement();
-    if (child == nullptr) {
-      if (!IsAtEnd())
-        Next();
-      continue;
-    }
-    statement->body.push_back(std::move(child));
-  }
-
-  if (Check("否则")) {
-    const SourcePosition else_position = Next().position;
-    const bool same_line_condition =
-        !IsAtEnd() && !Check("结束") && Peek().position.line == else_position.line && !Check(";");
-    if (same_line_condition) {
-      statement->else_body.push_back(ParseIfConditional());
-      statement->else_keyword_else = true;
-      return statement;
-    }
-    while (!IsAtEnd() &&
-           !(Check("结束") && Peek(1).kind == TokenKind::kIdentifier && Peek(1).text == "如果")) {
+  const auto parse_body = [this, &at_terminator](std::vector<StmtPtr>* body) {
+    while (!IsAtEnd() && !at_terminator()) {
       StmtPtr child = ParseStatement();
       if (child == nullptr) {
         if (!IsAtEnd())
           Next();
         continue;
       }
-      statement->else_body.push_back(std::move(child));
+      body->push_back(std::move(child));
+    }
+  };
+
+  IfArm arm;
+  arm.position = position;
+  arm.condition = ParseExpression();
+  Match("则");
+
+  bool has_final_else = false;
+  while (true) {
+    parse_body(&arm.body);
+    statement->if_arms.push_back(std::move(arm));
+    arm = IfArm();
+    if (!Check("否则"))
+      break;
+
+    const SourcePosition else_position = Next().position;
+    if (Check("如果")) {
+      Next();
+      arm.position = else_position;
+      arm.block_else = true;
+      arm.condition = ParseExpression();
+      Match("则");
+      continue;
+    }
+    const bool same_line_condition =
+        !IsAtEnd() && !Check("结束") && Peek().position.line == else_position.line && !Check(";");
+    if (same_line_condition) {
+      arm.position = Peek().position;
+      arm.condition = ParseExpression();
+      Match("则");
+      continue;
+    }
+    statement->else_position = else_position;
+    has_final_else = true;
+    break;
+  }
+
+  if (has_final_else)
+    parse_body(&statement->else_body);
+
+  for (std::size_t i = statement->if_arms.size(); i-- > 0;) {
+    if (i + 1 != statement->if_arms.size() && !statement->if_arms[i + 1].block_else)
+      continue;
+    int line = 0;
+    if (Check("结束"))
+      line = static_cast<int>(Peek().position.line) + 1;
+    Expect("结束", "'结束'");
+    Expect("如果", "'如果'");
+    if (i == 0) {
+      statement->end_line = line;
+    } else {
+      statement->if_arms[i].end_line = line;
     }
   }
-  if (Check("结束"))
-    statement->end_line = static_cast<int>(Peek().position.line) + 1;
-  Expect("结束", "'结束'");
-  Expect("如果", "'如果'");
   return statement;
 }
 

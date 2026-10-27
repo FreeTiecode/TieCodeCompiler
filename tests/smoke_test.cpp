@@ -796,6 +796,32 @@ TEST_F(SmokeTest, SupportsElseBlockWithNestedIf) {
   ASSERT_EQ(result.status, 0) << result.log;
 }
 
+TEST_F(SmokeTest, CompilesDeepConditionalElseChain) {
+  std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
+  source << "类 启动窗口 : 窗口\n"
+            "  事件 启动窗口:创建完毕()\n"
+            "    变量 数量: 整数 = 2\n"
+            "    如果 数量 == 0\n"
+            "      调试输出(\"首\")\n";
+  for (int i = 1; i < 60000; ++i) {
+    source << "    否则 数量 == " << i
+           << "\n"
+              "      调试输出(\"中\")\n";
+  }
+  source << "    否则\n"
+            "      调试输出(\"尾\")\n"
+            "    结束 如果\n"
+            "  结束 事件\n"
+            "结束 类\n";
+  source.close();
+
+  const ProcessResult result = RunCompiler();
+  ASSERT_EQ(result.status, 0) << result.log;
+  const std::string java = ReadFile(workspace_ / "out" / "src" / "启动窗口.java");
+  EXPECT_TRUE(Contains(java, "} else {if (数量 == 59999) {")) << "深链未被展平发射";
+  EXPECT_TRUE(Contains(java, "String.valueOf(\"尾\")")) << java.substr(java.size() - 2000);
+}
+
 TEST_F(SmokeTest, ResolvesTransitiveLocalUsage) {
   std::ofstream source(workspace_ / "src" / "启动窗口.t", std::ios::binary | std::ios::trunc);
   source << "类 启动窗口 : 窗口\n"

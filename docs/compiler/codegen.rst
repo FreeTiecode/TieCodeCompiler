@@ -134,7 +134,7 @@ Java 后端（``src/targets/java``\ ）把 AST 直接发射为 Java 文本。没
    * - ``kVariable``
      - 未使用局部变量跳过并报 ``lint.unused-local``\ ；类型空 → ``Object``\ ；有初始化器 → ``InitializerExpression``\ ；有 code → 原样；有容量 → ``new T[...]``\ ；无初始化器时按类型补默认值（原始类型零值、``文本 = ""``\ 、外部引用/用户类 ``new T()``\ ），``?``\ 抑制默认值。
    * - ``kIf``
-     - 常量布尔条件折叠并报 ``code.constant-if``\ ；否则 ``if/else``\ ；嵌套 else 输出 ``} else { if ... }``\ 。
+     - 常量布尔条件折叠并报 ``code.constant-if``\ ；否则 ``if/else``\ ；``if_arms``\ 依次输出（``否则 <条件>`` → ``} else {if ...``\ ，``否则 如果`` → ``} else {``\ 换行缩进），收尾 ``else_body`` 输出 ``} else { ... }``\ ，逐层闭合。
    * - ``kLoopCount``
      - ``for (int rn = begin; rn < end; rn += step)``\ ；缺省 ``begin=0``\ 、``end=0``\ 、``step=1``\ ；循环变量重命名。
    * - ``kLoopWhile``

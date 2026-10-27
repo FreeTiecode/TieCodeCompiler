@@ -484,6 +484,8 @@ void CheckBlockForbiddenCreation(const std::vector<StmtPtr>& block, const std::s
     }
     CheckBlockForbiddenCreation(statement->body, file, forbidden, diagnostics);
     CheckBlockForbiddenCreation(statement->else_body, file, forbidden, diagnostics);
+    for (const IfArm& arm : statement->if_arms)
+      CheckBlockForbiddenCreation(arm.body, file, forbidden, diagnostics);
     for (const SwitchCase& item : statement->cases)
       CheckBlockForbiddenCreation(item.body, file, forbidden, diagnostics);
   }

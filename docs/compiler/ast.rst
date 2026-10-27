@@ -160,19 +160,27 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      SourcePosition position;
    };
 
+   struct IfArm {
+     SourcePosition position;
+     ExprPtr condition;
+     std::vector<StmtPtr> body;
+     int end_line = 0;             // 1 基
+     bool block_else = false;
+   };
+
    struct Stmt {
      StmtKind kind = StmtKind::kExpression;
      SourcePosition position;
      ExprPtr expr;
      std::vector<StmtPtr> body;
      std::vector<StmtPtr> else_body;
+     std::vector<IfArm> if_arms;
 
      std::string name;
      std::string type_name;
      SourcePosition type_position;
      int end_line = 0;             // 1 基
      SourcePosition else_position;
-     bool else_keyword_else = false;
      bool is_const = false;
 
      std::string loop_variable;
@@ -212,8 +220,8 @@ FTC 没有独立的 lowered IR。parser 直接构造 ``src/ir/ast.h``\ 中的节
      - ``name``\ 、``type_name``\ 、``expr``\ 或 ``code_text``\ 、``is_const``
      - ``变量``/``常量``\ 。
    * - ``kIf``
-     - ``expr``\ 、``body``\ 、``else_body``\ 、``else_position``\ 、``else_keyword_else``\ 、``end_line``
-     - ``如果``/``否则``\ 。
+     - ``if_arms``\ 、``else_body``\ 、``else_position``\ 、``end_line``
+     - ``如果``/``否则``\ ；``if_arms``\ 平铺整条 ``如果``/``否则 如果``/``否则 <条件>`` 链，``else_body``\ 收尾的 ``否则``\ 块。``IfArm::block_else``\ 标记 ``否则 如果``\ 写法（独占一个 ``结束 如果``\ ），``IfArm::end_line``\ 记录该分支的终止行。
    * - ``kLoopCount``
      - ``loop_variable``\ 、``loop_begin``\ 、``loop_end``\ 、``loop_step``\ 、``body``
      - 计次循环。

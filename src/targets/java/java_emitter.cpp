@@ -905,67 +905,109 @@ bool JavaEmitter::EmitSubscriptions(const ClassInfo& klass, int indent, EmittedT
 }
 
 void JavaEmitter::EmitIf(const ClassInfo& klass, const Stmt& statement, int indent,
-                         bool inline_prefix, EmittedText* out) {
-  ConstantValue constant;
-  if (statement.expr != nullptr && FoldConstant(*statement.expr, &constant) &&
-      constant.kind == ConstantValue::Kind::kBoolean) {
-    if (klass.declaration != nullptr) {
-      const std::string message = constant.boolean ? "如果语句条件永远为真，已去除其否则部分"
-                                                   : "如果语句条件永远为假，已将其去除";
-      diagnostics_.Warning(klass.declaration->file, ExpressionStart(*statement.expr), message,
-                           "code.constant-if");
+                         EmittedText* out) {
+  struct PendingClose {
+    int depth = 0;
+    std::size_t arm = 0;
+  };
+  const std::vector<IfArm>& arms = statement.if_arms;
+  std::vector<PendingClose> pending;
+  bool suppressed_tail = false;
+  int depth = indent;
+  int emitted = -1;
+
+  for (std::size_t i = 0; i < arms.size(); ++i) {
+    const IfArm& arm = arms[i];
+    bool inline_prefix = false;
+    if (i > 0 && emitted + 1 == static_cast<int>(i)) {
+      out->Mark(current_file_, static_cast<int>(arms[i - 1].position.line) + 1);
+      Indent(depth, out);
+      if (arm.block_else) {
+        out->append("} else {\n");
+        ++depth;
+      } else {
+        out->append("} else {");
+        inline_prefix = true;
+      }
+    } else if (i > 0) {
+      out->Mark(current_file_, static_cast<int>(arm.position.line) + 1);
     }
-    const std::vector<StmtPtr>& emitted = constant.boolean ? statement.body : statement.else_body;
-    for (const StmtPtr& child : emitted) {
-      EmitStatement(klass, *child, indent, out);
+
+    ConstantValue constant;
+    if (arm.condition != nullptr && FoldConstant(*arm.condition, &constant) &&
+        constant.kind == ConstantValue::Kind::kBoolean) {
+      if (klass.declaration != nullptr) {
+        const std::string message = constant.boolean ? "如果语句条件永远为真，已去除其否则部分"
+                                                     : "如果语句条件永远为假，已将其去除";
+        diagnostics_.Warning(klass.declaration->file, ExpressionStart(*arm.condition), message,
+                             "code.constant-if");
+      }
+      suppressed_tail = true;
+      if (constant.boolean) {
+        for (const StmtPtr& child : arm.body) {
+          if (child != nullptr)
+            EmitStatement(klass, *child, depth, out);
+        }
+        break;
+      }
+      if (i + 1 == arms.size()) {
+        for (const StmtPtr& child : statement.else_body) {
+          if (child != nullptr)
+            EmitStatement(klass, *child, depth, out);
+        }
+      }
+      continue;
     }
-    return;
-  }
-  if (!inline_prefix)
-    Indent(indent, out);
-  out->append("if (");
-  out->append(statement.expr != nullptr ? EmitExpression(klass, *statement.expr) : "false");
-  out->append(") {\n");
-  for (const StmtPtr& child : statement.body) {
-    EmitStatement(klass, *child, indent + 1, out);
+
+    if (!inline_prefix)
+      Indent(depth, out);
+    out->append("if (");
+    out->append(arm.condition != nullptr ? EmitExpression(klass, *arm.condition) : "false");
+    out->append(") {\n");
+    for (const StmtPtr& child : arm.body) {
+      if (child != nullptr)
+        EmitStatement(klass, *child, depth + 1, out);
+    }
+    pending.push_back(PendingClose{depth, i});
+    emitted = static_cast<int>(i);
+    suppressed_tail = false;
   }
 
-  if (statement.else_body.empty()) {
-    out->Mark(current_file_, static_cast<int>(statement.position.line) + 1);
-    Indent(indent, out);
-    out->append("}\n");
-    return;
-  }
-
-  if (statement.else_body.size() == 1 && statement.else_body[0] != nullptr &&
-      statement.else_body[0]->kind == StmtKind::kIf) {
-    out->Mark(current_file_, static_cast<int>(statement.position.line) + 1);
-    if (statement.else_keyword_else) {
-      Indent(indent, out);
-      out->append("} else {");
-      EmitIf(klass, *statement.else_body[0], indent, true, out);
-    } else {
-      Indent(indent, out);
+  bool first_close = true;
+  while (!pending.empty()) {
+    const PendingClose close = pending.back();
+    pending.pop_back();
+    const IfArm& owner = arms[close.arm];
+    if (first_close && !suppressed_tail && !statement.else_body.empty()) {
+      out->Mark(current_file_, static_cast<int>(owner.position.line) + 1);
+      Indent(close.depth, out);
       out->append("} else {\n");
-      EmitIf(klass, *statement.else_body[0], indent + 1, false, out);
+      for (const StmtPtr& child : statement.else_body) {
+        if (child != nullptr)
+          EmitStatement(klass, *child, close.depth + 1, out);
+      }
+      const int end_line = close.arm == 0 ? statement.end_line : owner.end_line;
+      if (end_line > 0)
+        out->Mark(current_file_, end_line);
+      Indent(close.depth, out);
+      out->append("}\n");
+      first_close = false;
+      continue;
     }
-    if (statement.end_line > 0)
-      out->Mark(current_file_, statement.end_line);
-    Indent(indent, out);
+    if (first_close && !suppressed_tail) {
+      out->Mark(current_file_, static_cast<int>(owner.position.line) + 1);
+      Indent(close.depth, out);
+      out->append("}\n");
+      first_close = false;
+      continue;
+    }
+    const int end_line = close.arm == 0 ? statement.end_line : owner.end_line;
+    if (end_line > 0)
+      out->Mark(current_file_, end_line);
+    Indent(close.depth, out);
     out->append("}\n");
-    return;
+    first_close = false;
   }
-
-  out->Mark(current_file_, static_cast<int>(statement.position.line) + 1);
-  Indent(indent, out);
-  out->append("} else {\n");
-  for (const StmtPtr& child : statement.else_body) {
-    EmitStatement(klass, *child, indent + 1, out);
-  }
-  if (statement.end_line > 0)
-    out->Mark(current_file_, statement.end_line);
-  Indent(indent, out);
-  out->append("}\n");
 }
 void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, int indent,
                                 EmittedText* out) {
@@ -1104,7 +1146,7 @@ void JavaEmitter::EmitStatement(const ClassInfo& klass, const Stmt& statement, i
       return;
     }
     case StmtKind::kIf: {
-      EmitIf(klass, statement, indent, false, out);
+      EmitIf(klass, statement, indent, out);
       return;
     }
     case StmtKind::kLoopCount: {

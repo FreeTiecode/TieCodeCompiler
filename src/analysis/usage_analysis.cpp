@@ -97,6 +97,11 @@ void CollectFromStatement(const SymbolTable& symbols, const ClassInfo* context, 
   for (const StmtPtr& child : stmt->else_body) {
     CollectFromStatement(symbols, context, child.get(), output);
   }
+  for (const IfArm& arm : stmt->if_arms) {
+    CollectFromExpression(symbols, context, arm.condition.get(), output);
+    for (const StmtPtr& child : arm.body)
+      CollectFromStatement(symbols, context, child.get(), output);
+  }
 }
 
 void CollectReference(const SymbolTable& symbols, const ClassInfo* context,
@@ -569,6 +574,12 @@ struct UsedMemberCollector {
     }
     for (const StmtPtr& child : statement->else_body) {
       ScanStatement(context, locals, child.get());
+    }
+    for (const IfArm& arm : statement->if_arms) {
+      ScanExpression(context, locals, arm.condition.get());
+      for (const StmtPtr& child : arm.body) {
+        ScanStatement(context, locals, child.get());
+      }
     }
   }
 

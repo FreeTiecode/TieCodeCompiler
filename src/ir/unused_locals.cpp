@@ -41,49 +41,52 @@ void CollectCodeTextNames(const std::string& text, std::set<std::string>* names)
   }
 }
 
-void CollectStmtNames(const Stmt* statement, std::set<std::string>* names) {
-  if (statement == nullptr || names == nullptr)
-    return;
-  CollectExprNames(statement->expr.get(), names);
-  CollectExprNames(statement->loop_begin.get(), names);
-  CollectExprNames(statement->loop_end.get(), names);
-  CollectExprNames(statement->loop_step.get(), names);
-  if (statement->kind == StmtKind::kCode)
-    CollectCodeTextNames(statement->code_text, names);
-  for (const SwitchCase& item : statement->cases) {
-    for (const ExprPtr& value : item.values)
-      CollectExprNames(value.get(), names);
-    for (const StmtPtr& child : item.body)
-      CollectStmtNames(child.get(), names);
-  }
-  for (const StmtPtr& child : statement->body)
-    CollectStmtNames(child.get(), names);
-  for (const StmtPtr& child : statement->else_body)
-    CollectStmtNames(child.get(), names);
+void MergeNames(const std::set<std::string>& source, std::set<std::string>* target) {
+  target->insert(source.begin(), source.end());
 }
 
-void AnalyzeBlock(const std::vector<StmtPtr>& block, std::set<const Stmt*>* to_remove) {
-  for (const StmtPtr& statement : block) {
-    if (statement == nullptr)
-      continue;
-    AnalyzeBlock(statement->body, to_remove);
-    AnalyzeBlock(statement->else_body, to_remove);
-    for (const SwitchCase& item : statement->cases)
-      AnalyzeBlock(item.body, to_remove);
-  }
+std::set<std::string> AnalyzeBlock(const std::vector<StmtPtr>& block,
+                                   std::set<const Stmt*>* to_remove);
 
+std::set<std::string> CollectSubtreeNames(const Stmt& statement, std::set<const Stmt*>* to_remove) {
+  std::set<std::string> names;
+  CollectExprNames(statement.expr.get(), &names);
+  CollectExprNames(statement.loop_begin.get(), &names);
+  CollectExprNames(statement.loop_end.get(), &names);
+  CollectExprNames(statement.loop_step.get(), &names);
+  if (statement.kind == StmtKind::kCode)
+    CollectCodeTextNames(statement.code_text, &names);
+  for (const SwitchCase& item : statement.cases) {
+    for (const ExprPtr& value : item.values)
+      CollectExprNames(value.get(), &names);
+    MergeNames(AnalyzeBlock(item.body, to_remove), &names);
+  }
+  for (const IfArm& arm : statement.if_arms) {
+    CollectExprNames(arm.condition.get(), &names);
+    MergeNames(AnalyzeBlock(arm.body, to_remove), &names);
+  }
+  MergeNames(AnalyzeBlock(statement.body, to_remove), &names);
+  MergeNames(AnalyzeBlock(statement.else_body, to_remove), &names);
+  return names;
+}
+
+std::set<std::string> AnalyzeBlock(const std::vector<StmtPtr>& block,
+                                   std::set<const Stmt*>* to_remove) {
+  std::set<std::string> block_names;
   std::set<std::string> alive;
   std::map<const Stmt*, std::set<std::string>> declaration_refs;
   for (const StmtPtr& statement : block) {
     if (statement == nullptr)
       continue;
+    std::set<std::string> subtree = CollectSubtreeNames(*statement, to_remove);
+    MergeNames(subtree, &block_names);
     if (statement->kind == StmtKind::kVariable) {
-      std::set<std::string> names;
-      CollectExprNames(statement->expr.get(), &names);
-      declaration_refs[statement.get()] = std::move(names);
+      std::set<std::string> refs;
+      CollectExprNames(statement->expr.get(), &refs);
+      declaration_refs[statement.get()] = std::move(refs);
       continue;
     }
-    CollectStmtNames(statement.get(), &alive);
+    MergeNames(subtree, &alive);
   }
 
   bool changed = true;
@@ -105,6 +108,7 @@ void AnalyzeBlock(const std::vector<StmtPtr>& block, std::set<const Stmt*>* to_r
       to_remove->insert(statement.get());
     }
   }
+  return block_names;
 }
 
 void RemoveAndReport(std::vector<StmtPtr>* block, const std::set<const Stmt*>& to_remove,
@@ -124,6 +128,8 @@ void RemoveAndReport(std::vector<StmtPtr>* block, const std::set<const Stmt*>& t
     }
     RemoveAndReport(&statement->body, to_remove, file, diagnostics);
     RemoveAndReport(&statement->else_body, to_remove, file, diagnostics);
+    for (IfArm& arm : statement->if_arms)
+      RemoveAndReport(&arm.body, to_remove, file, diagnostics);
     for (SwitchCase& item : statement->cases)
       RemoveAndReport(&item.body, to_remove, file, diagnostics);
   }

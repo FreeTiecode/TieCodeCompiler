@@ -240,6 +240,12 @@ void JavaEmitter::CollectStatementImports(const ClassInfo& klass, const Stmt* st
   for (const StmtPtr& child : statement->else_body) {
     CollectStatementImports(klass, child.get(), imports);
   }
+  for (const IfArm& arm : statement->if_arms) {
+    CollectCalleeOwners(klass, arm.condition.get(), imports);
+    for (const StmtPtr& child : arm.body) {
+      CollectStatementImports(klass, child.get(), imports);
+    }
+  }
 }
 
 void JavaEmitter::CollectClassLiteralImports(const ClassInfo& klass, const Expr* expression,
@@ -420,6 +426,12 @@ void JavaEmitter::CollectImports(const ClassInfo& klass, std::set<std::string>* 
         }
         for (const StmtPtr& child : statement->else_body) {
           CollectFromExpression(klass, child->expr.get(), imports);
+        }
+        for (const IfArm& arm : statement->if_arms) {
+          CollectFromExpression(klass, arm.condition.get(), imports);
+          for (const StmtPtr& child : arm.body) {
+            CollectFromExpression(klass, child->expr.get(), imports);
+          }
         }
       }
       CollectFromExpression(klass, member.expression_body.get(), imports);

@@ -60,8 +60,7 @@ private:
   void EmitMemberBody(const ClassInfo& klass, const Member& member, EmittedText* body);
   void RefreshRenames(const ClassInfo& klass);
   void EmitStatement(const ClassInfo& klass, const Stmt& statement, int indent, EmittedText* out);
-  void EmitIf(const ClassInfo& klass, const Stmt& statement, int indent, bool inline_prefix,
-              EmittedText* out);
+  void EmitIf(const ClassInfo& klass, const Stmt& statement, int indent, EmittedText* out);
   std::string EmitExpression(const ClassInfo& klass, const Expr& expression);
   std::string EmitArrayLiteral(const ClassInfo& klass, const Expr& expression,
                                const std::string& element_type, int dimensions);
